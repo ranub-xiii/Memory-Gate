@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+build/
+dist/
+
+# Local credentials, private keys, and generated audit data
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.secrets/
+secrets/
+audit*.jsonl
+*.audit.jsonl

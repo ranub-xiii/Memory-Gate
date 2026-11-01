@@ -1,0 +1,321 @@
+"""Tests for the bounded Termux workspace operations."""
+from __future__ import annotations
+
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from dulwich import porcelain
+
+from authoritylab.termux_workspace_tools import BoundedWorkspace, MAX_FILE_BYTES, WorkspaceError
+
+
+class BoundedWorkspaceTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name) / "repo"
+        self.root.mkdir()
+        porcelain.init(str(self.root))
+        (self.root / "README.md").write_text("hello\n", encoding="utf-8")
+        porcelain.add(str(self.root), paths=["README.md"])
+        porcelain.commit(
+            str(self.root),
+            message=b"initial",
+            author=b"Test User <test@example.com>",
+            committer=b"Test User <test@example.com>",
+        )
+        self.workspace = BoundedWorkspace(self.root)
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def test_status_has_fixed_allowlist(self):
+        status = self.workspace.status()
+        self.assertTrue(status["ready"])
+        self.assertNotIn("shell", status["allowed_operations"])
+        self.assertIn("diagnostics", status["allowed_operations"])
+
+    def test_diagnostics_are_bounded_read_only_and_portable(self):
+        with (
+            patch("authoritylab.termux_workspace_tools.subprocess.run",
+                  side_effect=AssertionError("diagnostics must not spawn subprocesses")),
+            patch("authoritylab.termux_workspace_tools.os.stat",
+                  wraps=os.stat) as stat_call,
+            patch("authoritylab.termux_workspace_tools.os.access",
+                  wraps=os.access) as access_call,
+        ):
+            result = self.workspace.diagnostics()
+
+        self.assertEqual(result["uid"], os.getuid())
+        self.assertEqual(result["euid"], os.geteuid())
+        self.assertIn("python_version", result)
+        self.assertIn("python_implementation", result)
+        self.assertIn("selinux_context", result)
+        self.assertTrue(result["paths"])
+        self.assertTrue(stat_call.call_count >= len(result["paths"]))
+        self.assertTrue(access_call.call_count >= len(result["paths"]))
+        encoded = json.dumps(result)
+        self.assertNotIn(str(Path.home()), encoded)
+        self.assertNotIn("/data/data/com.termux", encoded)
+
+    def test_diagnostics_does_not_follow_arbitrary_prefix_environment(self):
+        foreign_prefix = Path(self.temp.name) / "foreign-prefix"
+        foreign_prefix.mkdir()
+        with (
+            patch.dict(os.environ, {"PREFIX": str(foreign_prefix)}),
+            patch("authoritylab.termux_workspace_tools.os.stat", wraps=os.stat) as stat_call,
+            patch("authoritylab.termux_workspace_tools.os.access", wraps=os.access) as access_call,
+        ):
+            result = self.workspace.diagnostics()
+        self.assertNotIn("environment_prefix", result["paths"])
+        self.assertNotIn("environment_prefix_bin", result["paths"])
+        inspected = [
+            Path(call.args[0])
+            for call in stat_call.call_args_list + access_call.call_args_list
+        ]
+        self.assertNotIn(foreign_prefix, inspected)
+        self.assertNotIn(foreign_prefix / "bin", inspected)
+
+    def test_diagnostics_sanitizes_path_errors(self):
+        with (
+            patch("authoritylab.termux_workspace_tools.os.stat",
+                  side_effect=PermissionError(13, "private TOKEN_SENTINEL")),
+            patch("authoritylab.termux_workspace_tools.os.access",
+                  side_effect=PermissionError(13, "private TOKEN_SENTINEL")),
+            patch("builtins.open",
+                  side_effect=PermissionError(13, "private TOKEN_SENTINEL")),
+        ):
+            result = self.workspace.diagnostics()
+        encoded = json.dumps(result)
+        self.assertNotIn("TOKEN_SENTINEL", encoded)
+        self.assertNotIn("private", encoded)
+        self.assertEqual(result["selinux_context"]["error"], "PermissionError")
+
+    def test_list_skips_git_and_symlinks(self):
+        outside = Path(self.temp.name) / "outside.txt"
+        outside.write_text("secret", encoding="utf-8")
+        (self.root / "link.txt").symlink_to(outside)
+        entries = self.workspace.list_files()
+        self.assertIn("README.md", entries)
+        self.assertNotIn(".git/", entries)
+        self.assertNotIn("link.txt", entries)
+
+    def test_read_and_write_inside_workspace(self):
+        self.assertEqual(self.workspace.read_file("README.md"), "hello\n")
+        self.workspace.write_file("new.txt", "world")
+        self.assertEqual((self.root / "new.txt").read_text(encoding="utf-8"), "world")
+
+    def test_rejects_absolute_parent_and_backslash_paths(self):
+        for path in ("/etc/passwd", "../outside.txt", "sub/../../outside.txt", "a\\b"):
+            with self.subTest(path=path), self.assertRaises(WorkspaceError):
+                self.workspace.read_file(path)
+
+
+    def test_read_file_uses_descriptor_based_confined_reader(self):
+        from authoritylab.secure_paths import read_confined_text_file
+
+        with patch(
+            "authoritylab.termux_workspace_tools.read_confined_text_file",
+            wraps=read_confined_text_file,
+        ) as confined_read:
+            self.assertEqual(self.workspace.read_file("README.md"), "hello\n")
+
+        confined_read.assert_called_once_with(
+            self.root.resolve(), "README.md", max_bytes=MAX_FILE_BYTES
+        )
+
+    def test_read_file_rejects_symlink_even_if_path_precheck_is_bypassed(self):
+        outside = Path(self.temp.name) / "outside.txt"
+        outside.write_text("do not disclose", encoding="utf-8")
+        link = self.root / "raced-link.txt"
+        link.symlink_to(outside)
+
+        # Model a race in which the preliminary Path-based check was completed
+        # before a symlink appeared at the same relative path.
+        with patch.object(self.workspace, "_path", return_value=link):
+            with self.assertRaises(WorkspaceError):
+                self.workspace.read_file("raced-link.txt")
+
+        self.assertEqual(outside.read_text(encoding="utf-8"), "do not disclose")
+
+
+    def test_read_file_rejects_fifo_without_blocking(self):
+        mkfifo = getattr(os, "mkfifo", None)
+        if not callable(mkfifo):
+            self.skipTest("FIFO creation is unavailable")
+        fifo = self.root / "pipe.txt"
+        try:
+            mkfifo(fifo)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"FIFO creation is unavailable: {type(exc).__name__}")
+
+        with self.assertRaises(WorkspaceError):
+            self.workspace.read_file("pipe.txt")
+
+
+    def test_rejects_git_metadata_reads_and_writes(self):
+        (self.root / ".git" / "config").write_text("[remote]", encoding="utf-8")
+        for path in (".git/config", ".git/hooks/pre-commit", "nested/.git/config"):
+            with self.subTest(path=path), self.assertRaises(WorkspaceError):
+                self.workspace.read_file(path)
+            with self.subTest(path=path), self.assertRaises(WorkspaceError):
+                self.workspace.write_file(path, "changed")
+        self.assertEqual(
+            (self.root / ".git" / "config").read_text(encoding="utf-8"),
+            "[remote]",
+        )
+
+    def test_rejects_symlink_reads_and_writes(self):
+        outside = Path(self.temp.name) / "outside.txt"
+        outside.write_text("secret", encoding="utf-8")
+        (self.root / "link.txt").symlink_to(outside)
+        with self.assertRaises(WorkspaceError):
+            self.workspace.read_file("link.txt")
+        with self.assertRaises(WorkspaceError):
+            self.workspace.write_file("link.txt", "changed")
+        self.assertEqual(outside.read_text(encoding="utf-8"), "secret")
+
+    def test_write_rejects_invalid_unicode_without_creating_file(self):
+        with self.assertRaisesRegex(WorkspaceError, "valid UTF-8"):
+            self.workspace.write_file("invalid-unicode.txt", "\ud800")
+        self.assertFalse((self.root / "invalid-unicode.txt").exists())
+
+    def test_write_rejects_non_string_and_empty_paths(self):
+        for path in ("", None, 7):
+            with self.subTest(path=path), self.assertRaises(WorkspaceError):
+                self.workspace.write_file(path, "content")
+
+    def test_write_rejects_hard_link_without_modifying_external_target(self):
+        outside = self.root.parent / "outside-hardlink.txt"
+        outside.write_text("safe original", encoding="utf-8")
+        link = self.root / "hard-link.txt"
+        link_fn = getattr(os, "link", None)
+        if link_fn is None:
+            self.skipTest("Hard-link creation is unavailable: os.link is not exposed")
+        try:
+            link_fn(outside, link)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"Hard-link creation is unavailable: {exc}")
+
+        with self.assertRaisesRegex(WorkspaceError, "hard-linked"):
+            self.workspace.write_file("hard-link.txt", "replacement")
+
+        self.assertEqual(outside.read_text(encoding="utf-8"), "safe original")
+        self.assertTrue(link.exists())
+
+    def test_write_replaces_file_atomically_and_keeps_content_bounded(self):
+        target = self.root / "replace-me.txt"
+        target.write_text("old", encoding="utf-8")
+        result = self.workspace.write_file("replace-me.txt", "new content")
+        self.assertEqual(result["path"], "replace-me.txt")
+        self.assertEqual(target.read_text(encoding="utf-8"), "new content")
+        self.assertLessEqual(target.stat().st_size, MAX_FILE_BYTES)
+
+    def test_rejects_large_content(self):
+        with self.assertRaises(WorkspaceError):
+            self.workspace.write_file("large.txt", "x" * 200_001)
+
+    def test_rejects_non_git_directory(self):
+        other = Path(self.temp.name) / "not-repo"
+        other.mkdir()
+        with self.assertRaises(ValueError):
+            BoundedWorkspace(other)
+
+    def test_rejects_directory_as_write_target(self):
+        with self.assertRaises(WorkspaceError):
+            self.workspace.write_file(".git", "not a directory")
+
+    def test_git_status_reports_clean_branch_without_subprocess(self):
+        status = self.workspace.git_status()
+        self.assertTrue(status.startswith("## "))
+        self.assertNotIn("?? ", status)
+        self.assertNotIn(" M ", status)
+
+    def test_git_status_reports_untracked_and_staged_changes(self):
+        (self.root / "untracked.txt").write_text("new", encoding="utf-8")
+        (self.root / "staged.txt").write_text("staged", encoding="utf-8")
+        porcelain.add(str(self.root), paths=["staged.txt"])
+
+        status = self.workspace.git_status()
+        self.assertIn("?? untracked.txt", status)
+        self.assertIn("A  staged.txt", status)
+
+    def test_git_status_reports_unstaged_changes(self):
+        (self.root / "README.md").write_text("changed\n", encoding="utf-8")
+        status = self.workspace.git_status()
+        self.assertIn(" M README.md", status)
+
+    def test_git_diff_returns_unstaged_patch_without_subprocess(self):
+        (self.root / "README.md").write_text("changed\n", encoding="utf-8")
+        diff = self.workspace.git_diff()
+        self.assertIn("README.md", diff)
+        self.assertIn("-hello", diff)
+        self.assertIn("+changed", diff)
+
+    def test_git_diff_is_empty_for_clean_tree(self):
+        self.assertEqual(self.workspace.git_diff(), "")
+
+    def test_run_tests_reports_os_error_without_exposing_filename(self):
+        error = PermissionError(13, "permission denied", "TOKEN_SENTINEL")
+        with patch(
+            "authoritylab.termux_workspace_tools.subprocess.run",
+            side_effect=error,
+        ):
+            with self.assertRaises(WorkspaceError) as raised:
+                self.workspace.run_tests()
+
+        message = str(raised.exception)
+        self.assertIn("operation could not start: PermissionError", message)
+        self.assertIn("permission denied", message)
+        self.assertIn("errno=13", message)
+        self.assertNotIn("TOKEN_SENTINEL", message)
+        self.assertNotIn("Traceback", message)
+
+
+    def test_read_file_maps_invalid_utf8_to_bounded_error(self):
+        error = UnicodeDecodeError("utf-8", b"\\xff", 0, 1, "invalid start byte")
+        with patch(
+            "authoritylab.termux_workspace_tools.read_confined_text_file",
+            side_effect=error,
+        ):
+            with self.assertRaises(WorkspaceError) as raised:
+                self.workspace.read_file("README.md")
+
+        self.assertEqual(str(raised.exception), "file is not valid UTF-8 text")
+        self.assertNotIn("Traceback", str(raised.exception))
+
+    def test_read_file_maps_validation_error_to_bounded_error(self):
+        with patch(
+            "authoritylab.termux_workspace_tools.read_confined_text_file",
+            side_effect=ValueError("oversized sensitive path"),
+        ):
+            with self.assertRaises(WorkspaceError) as raised:
+                self.workspace.read_file("README.md")
+
+        self.assertEqual(
+            str(raised.exception),
+            "file rejected by safe-read validation; check size and file type",
+        )
+        self.assertNotIn("oversized sensitive path", str(raised.exception))
+
+    def test_read_file_maps_os_error_without_exposing_filename(self):
+        error = PermissionError(13, "permission denied", "TOKEN_SENTINEL")
+        with patch(
+            "authoritylab.termux_workspace_tools.read_confined_text_file",
+            side_effect=error,
+        ):
+            with self.assertRaises(WorkspaceError) as raised:
+                self.workspace.read_file("README.md")
+
+        self.assertEqual(
+            str(raised.exception),
+            "safe file open failed; check path, permissions, or platform support",
+        )
+        self.assertNotIn("TOKEN_SENTINEL", str(raised.exception))
+        self.assertNotIn("Traceback", str(raised.exception))
+
+if __name__ == "__main__":
+    unittest.main()
