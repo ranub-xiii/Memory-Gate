@@ -24,7 +24,6 @@ The files below were copied byte-for-byte. SHA values are Git blob object IDs fr
 | `test_idempotency.py` | `tests/test_idempotency.py` | `c22dd583b4e0d79fc7c3826442c86ad73bec39bb` |
 | `test_server.py` | `tests/test_server.py` | `c6da65fd19b0b82abf335c9da733bf915ee0b437` |
 | `test_audit_log.py` | `tests/test_audit_log.py` | `7981a40f95e0318ceece98d30955032c73de4c16` |
-| `test_audit_integration.py` | `tests/test_audit_integration.py` | `1d6b491738c50872638df604628ad6a38286eb17` |
 | `test_privacy.py` | `tests/test_privacy.py` | `d74a5b606fbaefa57fa90e611b8220fc3541ee52` |
 
-The destination package initializer, `pyproject.toml`, CI workflow, README, and documentation were authored for the curated repository and are not byte-for-byte upstream files.
+The destination package initializer, `pyproject.toml`, CI workflow, README, and documentation were authored for the curated repository and are not byte-for-byte upstream files. The general workflow-engine audit integration test was deliberately excluded because it imports unrelated workflow-engine components.
