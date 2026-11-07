@@ -19,6 +19,3 @@ test = ["pytest>=8,<9", "flake8>=7,<8", "jsonschema>=4.23,<5"]
 [tool.setuptools]
 packages = ["authoritylab", "memory_gate_core"]
 package-dir = { "authoritylab" = ".", "memory_gate_core" = "memory_gate_core" }
-
-[tool.pytest.ini_options]
-addopts = "--import-mode=importlib"
