@@ -1,0 +1,257 @@
+"""Append-only audit storage with a hash chain and optional HMAC signatures.
+
+The hash chain detects accidental edits/reordering. Optional HMAC signatures
+also detect whole-file rewrites by actors who do not possess the external key.
+Neither mode prevents deletion or denial of service; protect the key and store.
+"""
+from __future__ import annotations
+
+import fcntl
+import hashlib
+import hmac
+import json
+import os
+import stat
+import sys
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Mapping
+
+from .privacy import redact_sensitive_data
+
+_ZERO_HASH = "0" * 64
+_BASE_FIELDS = {"event_id", "recorded_at", "previous_hash", "event", "hash"}
+
+
+def _canonical(value: Any) -> bytes:
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+
+
+def _digest(record_without_hash: Mapping[str, Any]) -> str:
+    return hashlib.sha256(_canonical(record_without_hash)).hexdigest()
+
+
+class DurableAuditLog:
+    def __init__(
+        self,
+        path: str,
+        *,
+        integrity_key: bytes | None = None,
+        max_record_bytes: int = 1_048_576,
+    ) -> None:
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError("audit path must be a non-empty string")
+        if integrity_key is not None and (
+            not isinstance(integrity_key, bytes) or len(integrity_key) < 32
+        ):
+            raise ValueError("integrity_key must be at least 32 bytes")
+        if type(max_record_bytes) is not int or max_record_bytes < 128:
+            raise ValueError("max_record_bytes must be an integer of at least 128")
+        self.path = os.path.abspath(path)
+        self.integrity_key = integrity_key
+        self.max_record_bytes = max_record_bytes
+
+    def _open_parent_directory(self, *, create: bool) -> int:
+        """Open each parent directory component without following symlinks."""
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        directory = getattr(os, "O_DIRECTORY", None)
+        if nofollow is None or directory is None or os.open not in os.supports_dir_fd or os.mkdir not in os.supports_dir_fd:
+            raise OSError("Platform lacks required safe directory-open features")
+        flags = os.O_RDONLY | directory | nofollow
+        start = os.sep
+        try:
+            descriptor = os.open(start, flags)
+        except PermissionError:
+            # Termux may deny opening "/" while allowing its private app root.
+            base_prefix = os.path.abspath(getattr(sys, "base_prefix", sys.prefix))
+            prefix_parts = [part for part in base_prefix.split(os.sep) if part]
+            if len(prefix_parts) < 2 or prefix_parts[-2:] != ["files", "usr"]:
+                raise
+            sandbox_root = os.path.abspath(os.path.dirname(os.path.dirname(base_prefix)))
+            parent_path = os.path.dirname(self.path)
+            try:
+                inside_sandbox = (
+                    os.path.commonpath((parent_path, sandbox_root)) == sandbox_root
+                )
+            except ValueError:
+                inside_sandbox = False
+            if not inside_sandbox:
+                raise PermissionError(
+                    "audit path is outside the accessible Termux sandbox"
+                ) from None
+            descriptor = os.open(sandbox_root, flags)
+            start = sandbox_root
+        try:
+            parent_path = os.path.dirname(self.path)
+            relative_parent = os.path.relpath(parent_path, start)
+            components = (
+                []
+                if relative_parent == os.curdir
+                else [part for part in relative_parent.split(os.sep) if part]
+            )
+            for component in components:
+                try:
+                    child = os.open(component, flags, dir_fd=descriptor)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    try:
+                        os.mkdir(component, 0o700, dir_fd=descriptor)
+                    except FileExistsError:
+                        pass
+                    child = os.open(component, flags, dir_fd=descriptor)
+                if not stat.S_ISDIR(os.fstat(child).st_mode):
+                    os.close(child)
+                    raise ValueError("audit parent path must contain only directories")
+                os.close(descriptor)
+                descriptor = child
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+    def append(self, event: Mapping[str, Any]) -> dict[str, str]:
+        if not isinstance(event, Mapping):
+            raise TypeError("audit event must be a mapping")
+        parent_descriptor = self._open_parent_directory(create=True)
+        flags = os.O_CREAT | os.O_RDWR | os.O_APPEND | os.O_CLOEXEC | os.O_NOFOLLOW
+        try:
+            descriptor = os.open(os.path.basename(self.path), flags, 0o600, dir_fd=parent_descriptor)
+        except BaseException:
+            os.close(parent_descriptor)
+            raise
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError("audit path must refer to a regular file")
+            if metadata.st_nlink != 1:
+                raise ValueError("hard-linked audit files are not permitted")
+            os.fchmod(descriptor, 0o600)
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            previous_hash = self._read_and_validate(descriptor)
+            record: dict[str, Any] = {
+                "event_id": uuid.uuid4().hex,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+                "previous_hash": previous_hash,
+                # Minimize accidental credential exposure before durable persistence.
+                "event": redact_sensitive_data(event),
+            }
+            record["hash"] = _digest(record)
+            if self.integrity_key is not None:
+                record["signature"] = self._signature(record)
+            payload = _canonical(record) + b"\n"
+            if len(payload) - 1 > self.max_record_bytes:
+                raise ValueError("audit record exceeds max_record_bytes")
+            view = memoryview(payload)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("audit append made no progress")
+                view = view[written:]
+            os.fsync(descriptor)
+            return {"event_id": record["event_id"], "event_hash": record["hash"]}
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+                os.close(parent_descriptor)
+
+    def verify(self) -> bool:
+        try:
+            parent_descriptor = self._open_parent_directory(create=False)
+        except FileNotFoundError:
+            return True
+        flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
+        try:
+            descriptor = os.open(os.path.basename(self.path), flags, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            os.close(parent_descriptor)
+            return True
+        except BaseException:
+            os.close(parent_descriptor)
+            raise
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError("audit path must refer to a regular file")
+            if metadata.st_nlink != 1:
+                raise ValueError("hard-linked audit files are not permitted")
+            fcntl.flock(descriptor, fcntl.LOCK_SH)
+            self._read_and_validate(descriptor)
+            return True
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+                os.close(parent_descriptor)
+
+    def _signature(self, record_with_hash: Mapping[str, Any]) -> str:
+        assert self.integrity_key is not None
+        return hmac.new(
+            self.integrity_key, _canonical(record_with_hash), hashlib.sha256
+        ).hexdigest()
+
+    def _read_and_validate(self, descriptor: int) -> str:
+        """Stream-validate the chain; return the last hash without loading all records."""
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        expected_previous = _ZERO_HASH
+        with os.fdopen(os.dup(descriptor), "rb") as stream:
+            while True:
+                line = stream.readline(self.max_record_bytes + 2)
+                if not line:
+                    break
+                if len(line) > self.max_record_bytes + 1 or not line.endswith(b"\n"):
+                    raise ValueError("audit chain invalid")
+                def reject_constant(value: str) -> None:
+                    raise ValueError(f"non-standard JSON constant: {value}")
+
+                def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+                    result: dict[str, Any] = {}
+                    for key, value in pairs:
+                        if key in result:
+                            raise ValueError("duplicate JSON object key")
+                        result[key] = value
+                    return result
+
+                try:
+                    record = json.loads(
+                        line,
+                        parse_constant=reject_constant,
+                        object_pairs_hook=reject_duplicate_keys,
+                    )
+                except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+                    raise ValueError("audit chain invalid") from None
+                if not isinstance(record, dict):
+                    raise ValueError("audit chain invalid")
+                signed = "signature" in record
+                expected_fields = _BASE_FIELDS | ({"signature"} if signed else set())
+                if set(record) != expected_fields:
+                    raise ValueError("audit chain invalid")
+                stored_hash = record.get("hash")
+                if not isinstance(stored_hash, str):
+                    raise ValueError("audit chain invalid")
+                unhashed = {key: value for key, value in record.items() if key not in {"hash", "signature"}}
+                if record.get("previous_hash") != expected_previous or _digest(unhashed) != stored_hash:
+                    raise ValueError("audit chain invalid")
+                if (
+                    not isinstance(record.get("event_id"), str)
+                    or not isinstance(record.get("recorded_at"), str)
+                    or not isinstance(record.get("event"), dict)
+                ):
+                    raise ValueError("audit chain invalid")
+                if signed:
+                    if self.integrity_key is None:
+                        raise ValueError("audit signature key required")
+                    signature = record.get("signature")
+                    signed_record = {key: value for key, value in record.items() if key != "signature"}
+                    if not isinstance(signature, str) or not hmac.compare_digest(
+                        signature, self._signature(signed_record)
+                    ):
+                        raise ValueError("audit signature invalid")
+                elif self.integrity_key is not None:
+                    raise ValueError("audit signature missing")
+                expected_previous = stored_hash
+        return expected_previous
