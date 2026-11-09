@@ -215,6 +215,18 @@ class OpenAIResponsesClientTests(unittest.TestCase):
             self.invoke(client, payload)
         self.assertEqual(raised.exception.code, "model_error")
 
+    def test_non_completed_response_is_unknown_even_with_partial_text(self):
+        for status in ("incomplete", "in_progress", "queued", "cancelled"):
+            with self.subTest(status=status):
+                opener = FakeOpener(FakeResponse(
+                    response_payload("partial answer", status=status)
+                ))
+                client = self.client(opener)
+                payload = client.build_payload("question", "memory")
+                with self.assertRaises(InvocationOutcomeUnknown):
+                    self.invoke(client, payload)
+                self.assertEqual(len(opener.requests), 1)
+
     def test_extract_output_text(self):
         result = OpenAIResponsesClient.extract_output_text(
             response_payload("expected output")

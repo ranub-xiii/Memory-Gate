@@ -220,6 +220,10 @@ class OpenAIResponsesClient:
                 if isinstance(error, dict) else "response_failed"
             )
             raise OpenAIAPIError(status, str(code))
+        if result.get("status") != "completed":
+            raise InvocationOutcomeUnknown(
+                "OpenAI returned a non-completed response"
+            )
         return result
 
     @staticmethod
