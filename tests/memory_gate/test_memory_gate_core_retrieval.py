@@ -74,6 +74,101 @@ class MemoryRetrievalTests(unittest.TestCase):
         )
         self.assertEqual([item["title"] for item in ranked], ["New policy"])
 
+    def test_unresolved_supersedes_relation_warns_without_suppressing(self):
+        old = self.record("Old policy", Status="VERIFIED")
+        new = self.record("New policy", Status="VERIFIED")
+        relation = {
+            "properties": {
+                "From Memory": "New policy",
+                "To Memory": "Old policy",
+                "Relation Type": "SUPERSEDES",
+                "Status": "UNRESOLVED",
+            }
+        }
+        ranked = rank_memory_records(
+            [old, new], None, now=self.NOW, relations=[relation],
+        )
+        self.assertEqual(
+            {item["title"] for item in ranked},
+            {"Old policy", "New policy"},
+        )
+        by_title = {item["title"]: item for item in ranked}
+        self.assertTrue(all(
+            any(warning.startswith("unresolved_relation:SUPERSEDES:")
+                for warning in item["retrieval_warnings"])
+            for item in by_title.values()
+        ))
+
+    def test_ambiguous_supersedes_endpoint_warns_without_suppressing(self):
+        old_one = {
+            **self.record("Old policy", Status="VERIFIED"),
+            "id": "old-policy-one",
+        }
+        old_two = {
+            **self.record("Old policy", Status="VERIFIED"),
+            "id": "old-policy-two",
+        }
+        new = self.record("New policy", Status="VERIFIED")
+        relation = {
+            "properties": {
+                "From Memory": "New policy",
+                "To Memory": "Old policy",
+                "Relation Type": "SUPERSEDES",
+                "Status": "ACTIVE",
+            }
+        }
+        ranked = rank_memory_records(
+            [old_one, old_two, new], None, now=self.NOW,
+            relations=[relation], limit=5,
+        )
+        self.assertEqual(len(ranked), 3)
+        for record in (old_one, old_two, new):
+            result = next(item for item in ranked if item["id"] == record["id"])
+            self.assertTrue(any(
+                warning.startswith("ambiguous_relation_endpoint:SUPERSEDES:")
+                for warning in result["retrieval_warnings"]
+            ))
+
+    def test_historical_retrieval_labels_active_supersession(self):
+        old = self.record("Old policy", Status="VERIFIED")
+        new = self.record("New policy", Status="VERIFIED")
+        relation = {
+            "properties": {
+                "From Memory": "New policy",
+                "To Memory": "Old policy",
+                "Relation Type": "SUPERSEDES",
+                "Status": "ACTIVE",
+            }
+        }
+        ranked = rank_memory_records(
+            [old, new], "historical old policy", now=self.NOW,
+            relations=[relation], limit=5,
+        )
+        old_result = next(item for item in ranked if item["title"] == "Old policy")
+        self.assertTrue(any(
+            warning.startswith("superseded_by_relation:SUPERSEDES:")
+            for warning in old_result["retrieval_warnings"]
+        ))
+
+    def test_missing_supersedes_endpoint_is_visible_on_resolved_record(self):
+        source = self.record("New policy", Status="VERIFIED")
+        relation = {
+            "properties": {
+                "From Memory": "New policy",
+                "To Memory": "Missing policy",
+                "Relation Type": "SUPERSEDES",
+                "Status": "ACTIVE",
+            }
+        }
+        ranked = rank_memory_records(
+            [source], None, now=self.NOW, relations=[relation],
+        )
+        self.assertEqual(len(ranked), 1)
+        self.assertTrue(any(
+            warning.startswith("unresolved_relation_endpoint:SUPERSEDES:")
+            for warning in ranked[0]["retrieval_warnings"]
+        ))
+
     def test_contradiction_relation_is_explicitly_labelled(self):
         first = self.record("Claim A", Status="VERIFIED")
         second = self.record("Claim B", Status="SUPPORTED")

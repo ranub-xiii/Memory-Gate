@@ -102,28 +102,73 @@ def _record_keys(record: Mapping[str, Any]) -> set[str]:
 def _relation_warnings(
     records: Sequence[Mapping[str, Any]],
     relations: Sequence[Mapping[str, Any]],
-) -> tuple[dict[int, list[str]], set[str]]:
+) -> tuple[dict[int, list[str]], set[int]]:
     warnings: dict[int, list[str]] = {}
-    superseded: set[str] = set()
+    superseded: set[int] = set()
     indexed = [(record, _record_keys(record)) for record in records]
+
+    def add_warning(record: Mapping[str, Any], warning: str) -> None:
+        warnings.setdefault(id(record), []).append(warning)
+
     for relation in relations:
         props = relation.get("properties")
         props = props if isinstance(props, Mapping) else {}
         relation_type = str(props.get("Relation Type", "")).upper()
         status = str(props.get("Status", "")).upper()
+        if relation_type != "SUPERSEDES" and relation_type not in _CONFLICTING:
+            continue
+        if status not in {"ACTIVE", "UNRESOLVED"}:
+            continue
+
         source = _norm(props.get("From Memory", ""))
         target = _norm(props.get("To Memory", ""))
-        if not source or not target or status not in {"ACTIVE", "UNRESOLVED"}:
+        if not source or not target:
             continue
-        if relation_type == "SUPERSEDES":
-            superseded.add(target)
-        if relation_type not in _CONFLICTING:
+
+        source_matches = [
+            record for record, keys in indexed if source in keys
+        ]
+        target_matches = [
+            record for record, keys in indexed if target in keys
+        ]
+        candidates = {
+            id(record): record
+            for record in source_matches + target_matches
+        }
+        edge = (
+            f"{relation_type}:"
+            f"{props.get('From Memory')}->{props.get('To Memory')}"
+        )
+
+        # Human-readable endpoints are aliases, not guaranteed identities.
+        # Never suppress records when an endpoint resolves to multiple pages.
+        if len(source_matches) > 1 or len(target_matches) > 1:
+            for record in candidates.values():
+                add_warning(record, f"ambiguous_relation_endpoint:{edge}")
             continue
-        for record, keys in indexed:
-            if source in keys or target in keys:
-                warnings.setdefault(id(record), []).append(
-                    f"conflicting_relation:{relation_type}:{props.get('From Memory')}->{props.get('To Memory')}"
+
+        if not source_matches or not target_matches:
+            missing = "from" if not source_matches else "to"
+            for record in candidates.values():
+                add_warning(
+                    record, f"unresolved_relation_endpoint:{edge}:{missing}"
                 )
+            continue
+
+        source_record = source_matches[0]
+        target_record = target_matches[0]
+        if relation_type == "SUPERSEDES":
+            if status == "ACTIVE":
+                superseded.add(id(target_record))
+                add_warning(target_record, f"superseded_by_relation:{edge}")
+            else:
+                for record in (source_record, target_record):
+                    add_warning(record, f"unresolved_relation:{edge}")
+            continue
+
+        for record in (source_record, target_record):
+            add_warning(record, f"conflicting_relation:{edge}")
+
     return warnings, superseded
 
 
@@ -161,7 +206,7 @@ def rank_memory_records(
         keys = _record_keys(record)
         if not historical and (
             status in _INACTIVE or record_type in {"KILL", "CLOSED"}
-            or bool(superseded_by) or bool(keys & relation_superseded)
+            or bool(superseded_by) or id(record) in relation_superseded
         ):
             continue
         created = _timestamp(props.get("Created At"))
