@@ -25,7 +25,7 @@
 ## Security boundaries and known gaps
 
 - The HMAC token binds the request digest, snapshot digest, policy version, subject/request identifiers, and source identifiers.
-- The current nonce is an integrity-bound random identifier, not a durable single-use replay defense.
+- The service wires token verification to SQLite nonce consumption. The nonce is hashed at rest and atomically inserted before outbound model access; a replay or nonce-store failure blocks the call. Direct standalone use of `MemoryGate` without a nonce consumer does not provide durable replay protection.
 - The service is single-user. Subject identity is configured by the host, not selected by an untrusted client.
 - Notion API access requires a separate server-side integration token with explicit access to every configured page and data source. A ChatGPT connector session is not inherited.
 - Model credentials remain server-side. The client cannot select the model or add tools, streaming, arbitrary payload fields, or conversation chaining.
@@ -37,9 +37,8 @@
 
 1. Semantic/vector retrieval evaluation against a labelled relevance set; current retrieval is deterministic lexical ranking, not embedding search.
 2. Explicit valid-from/valid-until fields and richer temporal semantics; the current archive schema exposes creation/update timestamps and supersession fields, but no validity interval.
-3. Durable single-use nonce consumption across processes; idempotency prevents duplicate service requests, but the signed nonce itself is not independently consumed.
-4. Live Notion and OpenAI integration tests in a controlled environment.
-5. Deployment-level bypass, credential-isolation, TLS, rate-limit, and recovery tests.
+3. Live Notion and OpenAI integration tests in a controlled environment.
+4. Deployment-level bypass, credential-isolation, TLS, rate-limit, and recovery tests.
 
 ## Install and test
 

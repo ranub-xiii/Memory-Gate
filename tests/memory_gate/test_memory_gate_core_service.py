@@ -5,7 +5,7 @@ import unittest
 from urllib.error import URLError
 
 from memory_gate_core.idempotency import SQLiteIdempotencyStore
-from memory_gate_core.memory_gate import MemoryGate, MemorySnapshot
+from memory_gate_core.memory_gate import GateRequest, MemoryGate, MemorySnapshot
 from memory_gate_core.memory_gate_service import MemoryGateService
 from memory_gate_core.openai_responses_client import OpenAIResponsesClient
 
@@ -120,6 +120,16 @@ class MemoryGateServiceTests(unittest.TestCase):
             self.store.get(self.key, self.service_digest(self.payload)),
             "COMPLETED",
         )
+
+    def test_service_consumes_signed_nonce_once_before_model_invocation(self):
+        request = GateRequest(
+            "nonce-replay-test", "subject-1",
+            self.service_digest(self.payload),
+        )
+        decision = self.gate.authorize(request, self.snapshot)
+        self.assertEqual(decision.status, "PASS")
+        self.assertTrue(self.gate.verify_token(decision.token, request))
+        self.assertFalse(self.gate.verify_token(decision.token, request))
 
     def test_duplicate_completed_request_is_not_sent_again(self):
         first = self.call()

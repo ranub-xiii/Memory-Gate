@@ -142,6 +142,36 @@ class IdempotencyStoreTests(unittest.TestCase):
         with self.assertRaises(IdempotencyError):
             store.claim(self.key, self.digest)
 
+    def test_nonce_is_single_use_and_survives_store_reopen(self):
+        nonce = "single-use-nonce-value-0001"
+        self.assertTrue(self.store.consume_nonce(nonce, self.now + 60))
+        reopened = SQLiteIdempotencyStore(
+            self.path, lease_seconds=30, clock=lambda: self.now
+        )
+        self.assertFalse(reopened.consume_nonce(nonce, self.now + 60))
+
+    def test_concurrent_nonce_consumption_has_one_winner(self):
+        nonce = "concurrent-nonce-value-0001"
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(
+                lambda _: self.store.consume_nonce(nonce, self.now + 60),
+                range(8),
+            ))
+        self.assertEqual(results.count(True), 1)
+        self.assertEqual(results.count(False), 7)
+
+    def test_expired_nonce_is_rejected(self):
+        nonce = "expired-nonce-value-0001"
+        self.assertFalse(self.store.consume_nonce(nonce, self.now))
+        self.assertFalse(self.store.consume_nonce(nonce, self.now - 1))
+
+    def test_raw_nonce_is_not_stored(self):
+        nonce = "private-nonce-value-0001"
+        self.assertTrue(self.store.consume_nonce(nonce, self.now + 60))
+        with open(self.path, "rb") as handle:
+            database_bytes = handle.read()
+        self.assertNotIn(nonce.encode("ascii"), database_bytes)
+
     def test_concurrent_claims_only_have_one_winner(self):
         other_key = "parallel-request-key-0002"
         with ThreadPoolExecutor(max_workers=8) as pool:

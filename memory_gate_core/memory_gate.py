@@ -187,6 +187,15 @@ class MemoryGate:
         self.max_context_bytes = max_context_bytes
         self.future_skew_seconds = float(future_skew_seconds)
         self.clock = clock
+        self._nonce_consumer: Callable[[str, float], bool] | None = None
+
+    def set_nonce_consumer(
+        self, consumer: Callable[[str, float], bool]
+    ) -> None:
+        """Require durable single-use nonce consumption during verification."""
+        if not callable(consumer):
+            raise ValueError("nonce_consumer must be callable")
+        self._nonce_consumer = consumer
 
     def authorize(
         self, request: GateRequest, snapshot: MemorySnapshot | None
@@ -256,7 +265,7 @@ class MemoryGate:
                 return False
             payload = json.loads(body.decode("utf-8"))
             now = self.clock()
-            return (
+            valid = (
                 isinstance(payload, dict)
                 and payload.get("v") == _TOKEN_VERSION
                 and payload.get("policy_version") == self.policy_version
@@ -280,8 +289,15 @@ class MemoryGate:
                 and payload["expires_at"] > float(now)
                 and payload["expires_at"] > payload["issued_at"]
                 and isinstance(payload.get("nonce"), str)
-                and bool(payload["nonce"])
+                and len(payload["nonce"]) >= 16
             )
+            if not valid:
+                return False
+            if self._nonce_consumer is None:
+                return True
+            return self._nonce_consumer(
+                payload["nonce"], float(payload["expires_at"])
+            ) is True
         except Exception:
             return False
 

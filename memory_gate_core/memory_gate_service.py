@@ -38,6 +38,7 @@ class MemoryGateService:
         self.memory_provider = memory_provider
         self.model_client = model_client
         self.idempotency_store = idempotency_store
+        self.gate.set_nonce_consumer(self.idempotency_store.consume_nonce)
         self.subject_id = subject_id
         self._client_token = client_token
         self.max_input_bytes = max_input_bytes

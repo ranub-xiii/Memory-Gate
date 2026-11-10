@@ -14,6 +14,7 @@ from urllib.parse import quote
 
 _KEY_PATTERN = re.compile(r"^[A-Za-z0-9._~-]{16,128}$")
 _DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_NONCE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 _TERMINAL_STATES = {"COMPLETED", "BLOCKED", "FAILED", "UNKNOWN"}
 
 
@@ -161,6 +162,13 @@ class SQLiteIdempotencyStore:
                     updated_at REAL NOT NULL
                 )"""
             )
+            connection.execute(
+                """CREATE TABLE IF NOT EXISTS consumed_nonces (
+                    nonce_hash TEXT PRIMARY KEY,
+                    expires_at REAL NOT NULL,
+                    consumed_at REAL NOT NULL
+                )"""
+            )
 
     def close(self) -> None:
         """Close the pinned directory descriptor."""
@@ -223,6 +231,53 @@ class SQLiteIdempotencyStore:
                 status = "UNKNOWN"
             connection.commit()
             return str(status)
+
+    def consume_nonce(self, nonce: str, expires_at: float) -> bool:
+        """Atomically consume a signed nonce once; store only its hash.
+
+        Expired rows are retained for one extra day before cleanup so a modest
+        wall-clock rollback cannot immediately make a previously used nonce
+        available again.
+        """
+        if (
+            not isinstance(nonce, str)
+            or not _NONCE_PATTERN.fullmatch(nonce)
+        ):
+            raise ValueError("nonce must be 16-128 URL-safe characters")
+        if (
+            type(expires_at) not in (int, float)
+            or not math.isfinite(expires_at)
+        ):
+            raise ValueError("expires_at must be a finite timestamp")
+        try:
+            now = self.clock()
+        except Exception:
+            raise IdempotencyError("clock unavailable") from None
+        if type(now) not in (int, float) or not math.isfinite(now):
+            raise IdempotencyError("clock unavailable")
+        if float(expires_at) <= float(now):
+            return False
+        nonce_hash = hashlib.sha256(nonce.encode("ascii")).hexdigest()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    "DELETE FROM consumed_nonces WHERE expires_at <= ?",
+                    (float(now) - 86_400.0,),
+                )
+                connection.execute(
+                    "INSERT INTO consumed_nonces "
+                    "(nonce_hash, expires_at, consumed_at) VALUES (?, ?, ?)",
+                    (nonce_hash, float(expires_at), float(now)),
+                )
+            except sqlite3.IntegrityError:
+                connection.rollback()
+                return False
+            except Exception:
+                connection.rollback()
+                raise
+            connection.commit()
+        return True
 
     def finish(
         self, key: str, request_digest: str, status: str
