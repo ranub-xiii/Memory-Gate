@@ -88,6 +88,34 @@ class MemoryGateTests(unittest.TestCase):
             "memory_context_too_large",
         )
 
+    def test_verification_is_repeatable_but_consumption_is_single_use(self):
+        consumed = set()
+
+        def consume(nonce, expires_at):
+            if nonce in consumed:
+                return False
+            consumed.add(nonce)
+            return True
+
+        self.gate.set_nonce_consumer(consume)
+        decision = self.gate.authorize(self.request, self.snapshot)
+        self.assertTrue(self.gate.verify_token(decision.token, self.request))
+        self.assertTrue(self.gate.verify_token(decision.token, self.request))
+        self.assertTrue(self.gate.consume_token(decision.token, self.request))
+        self.assertFalse(self.gate.consume_token(decision.token, self.request))
+
+    def test_execute_consumes_nonce_before_model_callback(self):
+        events = []
+        self.gate.set_nonce_consumer(
+            lambda nonce, expiry: events.append("nonce") or True
+        )
+        result = self.gate.execute(
+            self.request, self.snapshot,
+            lambda *args: events.append("model") or "result",
+        )
+        self.assertEqual(result.status, "PASS")
+        self.assertEqual(events, ["nonce", "model"])
+
     def test_request_substitution_invalidates_token(self):
         decision = self.gate.authorize(self.request, self.snapshot)
         other = GateRequest(

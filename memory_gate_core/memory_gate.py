@@ -253,7 +253,16 @@ class MemoryGate:
         return self._blocked(request, snapshot, reason)
 
     def verify_token(self, token: str, request: GateRequest) -> bool:
-        """Verify signature, expiry, policy version, and request binding."""
+        """Verify a token without consuming its nonce."""
+        return self._verify_token(token, request, consume_nonce=False)
+
+    def consume_token(self, token: str, request: GateRequest) -> bool:
+        """Verify and atomically consume a token nonce exactly once."""
+        return self._verify_token(token, request, consume_nonce=True)
+
+    def _verify_token(
+        self, token: str, request: GateRequest, *, consume_nonce: bool
+    ) -> bool:
         if not isinstance(request, GateRequest) or not isinstance(token, str):
             return False
         try:
@@ -293,7 +302,7 @@ class MemoryGate:
             )
             if not valid:
                 return False
-            if self._nonce_consumer is None:
+            if not consume_nonce or self._nonce_consumer is None:
                 return True
             return self._nonce_consumer(
                 payload["nonce"], float(payload["expires_at"])
@@ -314,7 +323,7 @@ class MemoryGate:
         decision = self.authorize(request, snapshot)
         if decision.status != "PASS" or not decision.token:
             return GateExecution("BLOCKED", None, decision)
-        if not self.verify_token(decision.token, request):
+        if not self.consume_token(decision.token, request):
             self._record(request, snapshot, "BLOCKED", "issued_token_invalid")
             blocked = GateDecision("BLOCKED", "issued_token_invalid")
             return GateExecution("BLOCKED", None, blocked)

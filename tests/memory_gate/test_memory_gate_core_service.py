@@ -128,8 +128,8 @@ class MemoryGateServiceTests(unittest.TestCase):
         )
         decision = self.gate.authorize(request, self.snapshot)
         self.assertEqual(decision.status, "PASS")
-        self.assertTrue(self.gate.verify_token(decision.token, request))
-        self.assertFalse(self.gate.verify_token(decision.token, request))
+        self.assertTrue(self.gate.consume_token(decision.token, request))
+        self.assertFalse(self.gate.consume_token(decision.token, request))
 
     def test_duplicate_completed_request_is_not_sent_again(self):
         first = self.call()

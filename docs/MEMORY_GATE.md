@@ -25,7 +25,7 @@
 ## Security boundaries and known gaps
 
 - The HMAC token binds the request digest, snapshot digest, policy version, subject/request identifiers, and source identifiers.
-- The service wires token verification to SQLite nonce consumption. The nonce is hashed at rest and atomically inserted before outbound model access; a replay or nonce-store failure blocks the call. Direct standalone use of `MemoryGate` without a nonce consumer does not provide durable replay protection.
+- The service wires token verification to SQLite nonce consumption. The nonce is hashed at rest and atomically inserted before outbound model access; a replay or nonce-store failure blocks the call. `MemoryGate.execute` consumes the nonce before invoking its callback; `verify_token` remains non-consuming so the downstream OpenAI adapter can independently re-check the signature. Direct standalone calls to `OpenAIResponsesClient` outside the gated executor do not provide durable replay protection.
 - The service is single-user. Subject identity is configured by the host, not selected by an untrusted client.
 - Notion API access requires a separate server-side integration token with explicit access to every configured page and data source. A ChatGPT connector session is not inherited.
 - Model credentials remain server-side. The client cannot select the model or add tools, streaming, arbitrary payload fields, or conversation chaining.
