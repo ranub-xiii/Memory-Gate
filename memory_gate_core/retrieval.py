@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
@@ -83,20 +84,92 @@ def _timestamp(value: object) -> float | None:
         return None
 
 
-def _norm(value: object) -> str:
+# Notion page IDs are the only accepted identity keys. Titles, Memory IDs,
+# and lexical similarity are display/retrieval metadata, never graph identity.
+_PAGE_ID = re.compile(
+    r"(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})",
+    re.IGNORECASE,
+)
+
+
+def _canonical_page_id(value: object) -> str | None:
     if not isinstance(value, str):
-        return ""
-    return " ".join(_TOKEN.findall(value.casefold()))
+        return None
+    candidate = value.strip()
+    if not _PAGE_ID.fullmatch(candidate):
+        return None
+    try:
+        return str(uuid.UUID(candidate))
+    except ValueError:
+        return None
 
 
-def _record_keys(record: Mapping[str, Any]) -> set[str]:
-    props = record.get("properties")
-    props = props if isinstance(props, Mapping) else {}
-    values = [record.get("id"), record.get("title"), props.get("Memory ID")]
-    return {
-        key for value in values
-        if value not in (None, "") and (key := _norm(str(value)))
-    }
+def _memory_endpoint_id(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    candidate = value.strip()
+    if candidate[:4].casefold() != "mem:":
+        return None
+    return _canonical_page_id(candidate[4:].strip())
+
+
+def _cyclic_components(
+    edges: Sequence[tuple[str, str]],
+) -> tuple[dict[str, int], set[str]]:
+    """Return SCC membership and nodes that participate in directed cycles."""
+    adjacency: dict[str, list[str]] = {}
+    reverse: dict[str, list[str]] = {}
+    for source, target in edges:
+        adjacency.setdefault(source, []).append(target)
+        adjacency.setdefault(target, [])
+        reverse.setdefault(target, []).append(source)
+        reverse.setdefault(source, [])
+
+    visited: set[str] = set()
+    finish_order: list[str] = []
+    for start in adjacency:
+        if start in visited:
+            continue
+        visited.add(start)
+        stack: list[tuple[str, int]] = [(start, 0)]
+        while stack:
+            node, index = stack[-1]
+            neighbors = adjacency[node]
+            if index < len(neighbors):
+                neighbor = neighbors[index]
+                stack[-1] = (node, index + 1)
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    stack.append((neighbor, 0))
+            else:
+                finish_order.append(node)
+                stack.pop()
+
+    component_by_node: dict[str, int] = {}
+    components: list[list[str]] = []
+    for start in reversed(finish_order):
+        if start in component_by_node:
+            continue
+        component_id = len(components)
+        members: list[str] = []
+        stack = [start]
+        component_by_node[start] = component_id
+        while stack:
+            node = stack.pop()
+            members.append(node)
+            for neighbor in reverse[node]:
+                if neighbor not in component_by_node:
+                    component_by_node[neighbor] = component_id
+                    stack.append(neighbor)
+        components.append(members)
+
+    cyclic_nodes: set[str] = set()
+    for members in components:
+        if len(members) > 1:
+            cyclic_nodes.update(members)
+        elif members and members[0] in adjacency[members[0]]:
+            cyclic_nodes.add(members[0])
+    return component_by_node, cyclic_nodes
 
 
 def _relation_warnings(
@@ -105,13 +178,20 @@ def _relation_warnings(
 ) -> tuple[dict[int, list[str]], set[int]]:
     warnings: dict[int, list[str]] = {}
     superseded: set[int] = set()
-    # Memory Relations is defined as edges between Memory Archive records.
-    # Other sources may reuse the same titles, but are not valid graph endpoints.
-    indexed = [
-        (record, _record_keys(record))
-        for record in records
-        if record.get("source_name") == "Memory Archive"
-    ]
+    # Memory Graph nodes are Memory Archive pages only. Architecture nodes
+    # cannot be resolved by this Memory-only resolver.
+    indexed: dict[str, list[Mapping[str, Any]]] = {}
+    for record in records:
+        if record.get("source_name") != "Memory Archive":
+            continue
+        page_id = _canonical_page_id(record.get("id"))
+        if page_id is not None:
+            indexed.setdefault(page_id, []).append(record)
+
+    dag_edges: dict[
+        str,
+        list[tuple[str, str, Mapping[str, Any], Mapping[str, Any], str]],
+    ] = {"SUPERSEDES": [], "DERIVED_FROM": []}
 
     def add_warning(record: Mapping[str, Any], warning: str) -> None:
         warnings.setdefault(id(record), []).append(warning)
@@ -120,34 +200,45 @@ def _relation_warnings(
         props = relation.get("properties")
         props = props if isinstance(props, Mapping) else {}
         relation_type = str(props.get("Relation Type", "")).upper()
+        if relation_type not in {
+            "SUPPORTS", "REFUTES", "CONTRADICTS",
+            "SUPERSEDES", "DERIVED_FROM",
+        }:
+            # PART_OF/TESTS/USES are not interpreted as Memory Graph edges.
+            continue
+
         status = str(props.get("Status", "")).upper()
-        if relation_type != "SUPERSEDES" and relation_type not in _CONFLICTING:
-            continue
-        if status not in {"ACTIVE", "UNRESOLVED"}:
+        if status in {"REJECTED", "SUPERSEDED"}:
             continue
 
-        source = _norm(props.get("From Memory", ""))
-        target = _norm(props.get("To Memory", ""))
-        if not source or not target:
-            continue
-
-        source_matches = [
-            record for record, keys in indexed if source in keys
-        ]
-        target_matches = [
-            record for record, keys in indexed if target in keys
-        ]
+        source_id = _memory_endpoint_id(props.get("From Memory"))
+        target_id = _memory_endpoint_id(props.get("To Memory"))
+        source_matches = indexed.get(source_id, []) if source_id else []
+        target_matches = indexed.get(target_id, []) if target_id else []
         candidates = {
-            id(record): record
-            for record in source_matches + target_matches
+            id(record): record for record in source_matches + target_matches
         }
+        relation_id = _canonical_page_id(relation.get("id"))
         edge = (
             f"{relation_type}:"
             f"{props.get('From Memory')}->{props.get('To Memory')}"
+            f"[edge_id={relation_id or 'missing'}]"
         )
 
-        # Human-readable endpoints are aliases, not guaranteed identities.
-        # Never suppress records when an endpoint resolves to multiple pages.
+        invalid_sides = []
+        if source_id is None:
+            invalid_sides.append("from_identity")
+        if target_id is None:
+            invalid_sides.append("to_identity")
+        if invalid_sides:
+            for record in candidates.values():
+                add_warning(
+                    record,
+                    f"unresolved_relation_endpoint:{edge}:"
+                    + ",".join(invalid_sides),
+                )
+            continue
+
         if len(source_matches) > 1 or len(target_matches) > 1:
             for record in candidates.values():
                 add_warning(record, f"ambiguous_relation_endpoint:{edge}")
@@ -163,20 +254,95 @@ def _relation_warnings(
 
         source_record = source_matches[0]
         target_record = target_matches[0]
-        if relation_type == "SUPERSEDES":
-            if status == "ACTIVE":
-                superseded.add(id(target_record))
-                add_warning(target_record, f"superseded_by_relation:{edge}")
-            else:
-                for record in (source_record, target_record):
-                    add_warning(record, f"unresolved_relation:{edge}")
+
+        if status == "UNRESOLVED":
+            for record in (source_record, target_record):
+                add_warning(record, f"unresolved_relation:{edge}")
             continue
 
-        for record in (source_record, target_record):
-            add_warning(record, f"conflicting_relation:{edge}")
+        if status != "ACTIVE":
+            for record in (source_record, target_record):
+                add_warning(
+                    record,
+                    f"blocked_relation_status:{edge}:{status or 'MISSING'}",
+                )
+            continue
+
+        # Evidence is provenance metadata, not proof of truth.
+        if relation_id is None:
+            for record in (source_record, target_record):
+                add_warning(record, f"blocked_relation_provenance:{edge}")
+            continue
+        evidence = props.get("Evidence")
+        if not isinstance(evidence, str) or not evidence.strip():
+            for record in (source_record, target_record):
+                add_warning(
+                    record, f"blocked_relation_missing_evidence:{edge}"
+                )
+            continue
+
+        if relation_type in {"SUPERSEDES", "DERIVED_FROM"}:
+            dag_edges[relation_type].append((
+                source_id, target_id, source_record, target_record, edge
+            ))
+        elif relation_type == "SUPPORTS":
+            add_warning(target_record, f"supported_by_relation:{edge}")
+        elif relation_type == "REFUTES":
+            add_warning(source_record, f"refutes_claim_relation:{edge}")
+            add_warning(target_record, f"refuted_by_relation:{edge}")
+        elif relation_type == "CONTRADICTS":
+            # Symmetric warning; neither claim is selected as the winner.
+            for record in (source_record, target_record):
+                add_warning(record, f"conflicting_relation:{edge}")
+
+    # SUPERSEDES and DERIVED_FROM are separate directed acyclic relations.
+    cycle_nodes_by_type: dict[str, set[str]] = {}
+    for relation_type, edges in dag_edges.items():
+        components, cycle_nodes = _cyclic_components([
+            (source_id, target_id)
+            for source_id, target_id, *_ in edges
+        ])
+        cycle_nodes_by_type[relation_type] = cycle_nodes
+        for source_id, target_id, source_record, target_record, edge in edges:
+            is_cycle_edge = (
+                source_id in cycle_nodes
+                and target_id in cycle_nodes
+                and components.get(source_id) == components.get(target_id)
+            )
+            if is_cycle_edge:
+                warning = f"cycle_relation:{relation_type}:{edge}"
+                add_warning(source_record, warning)
+                add_warning(target_record, warning)
+            elif source_id in cycle_nodes or target_id in cycle_nodes:
+                warning = f"cycle_blocked_relation:{relation_type}:{edge}"
+                add_warning(source_record, warning)
+                add_warning(target_record, warning)
+
+    # A SUPERSEDES edge touching any cycle participant cannot suppress.
+    for source_id, target_id, source_record, target_record, edge in dag_edges[
+        "SUPERSEDES"
+    ]:
+        if (
+            source_id in cycle_nodes_by_type["SUPERSEDES"]
+            or target_id in cycle_nodes_by_type["SUPERSEDES"]
+        ):
+            continue
+        superseded.add(id(target_record))
+        add_warning(target_record, f"superseded_by_relation:{edge}")
+
+    # DERIVED_FROM is explanatory provenance; neither end is suppressed.
+    for source_id, target_id, source_record, target_record, edge in dag_edges[
+        "DERIVED_FROM"
+    ]:
+        if (
+            source_id in cycle_nodes_by_type["DERIVED_FROM"]
+            or target_id in cycle_nodes_by_type["DERIVED_FROM"]
+        ):
+            continue
+        add_warning(source_record, f"derived_from_relation:{edge}")
+        add_warning(target_record, f"source_of_derivation_relation:{edge}")
 
     return warnings, superseded
-
 
 def rank_memory_records(
     records: Sequence[Mapping[str, Any]],
@@ -210,9 +376,21 @@ def rank_memory_records(
         title = str(record.get("title", ""))
         superseded_by = props.get("Superseded By")
         keys = _record_keys(record)
+        cycle_participant = any(
+            warning.startswith("cycle_relation:SUPERSEDES:")
+            for warning in relation_warnings.get(id(record), [])
+        )
         if not historical and (
-            status in _INACTIVE or record_type in {"KILL", "CLOSED"}
-            or bool(superseded_by) or id(record) in relation_superseded
+            (
+                status in _INACTIVE
+                and not (status == "SUPERSEDED" and cycle_participant)
+            )
+            or record_type in {"KILL", "CLOSED"}
+            or (bool(superseded_by) and not cycle_participant)
+            or (
+                id(record) in relation_superseded
+                and not cycle_participant
+            )
         ):
             continue
         created = _timestamp(props.get("Created At"))
