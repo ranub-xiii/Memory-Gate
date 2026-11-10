@@ -52,7 +52,7 @@ class FakeProvider:
     def __init__(self, snapshot):
         self.snapshot = snapshot
 
-    def retrieve(self, subject_id):
+    def retrieve(self, subject_id, *, query=None):
         return self.snapshot
 
 

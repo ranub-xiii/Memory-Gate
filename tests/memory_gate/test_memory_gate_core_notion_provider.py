@@ -219,12 +219,12 @@ class NotionMemoryProviderTests(unittest.TestCase):
         })
         responses = [
             FakeResponse({"results": [memory], "has_more": False}),
-            FakeResponse({
-                "results": [paragraph("Preference body")], "has_more": False,
-            }),
             FakeResponse({"results": [archive], "has_more": False}),
             FakeResponse({
                 "results": [paragraph("Archive body")], "has_more": False,
+            }),
+            FakeResponse({
+                "results": [paragraph("Preference body")], "has_more": False,
             }),
             FakeResponse({
                 "object": "page", "id": "about-page",
@@ -270,10 +270,10 @@ class NotionMemoryProviderTests(unittest.TestCase):
         })
         responses = [
             FakeResponse({"results": [memory], "has_more": False}),
+            FakeResponse({"results": [], "has_more": False}),
             FakeResponse({
                 "results": [paragraph("x" * 200)], "has_more": False,
             }),
-            FakeResponse({"results": [], "has_more": False}),
             FakeResponse({
                 "object": "page", "id": "about-page", "last_edited_time": "v1"
             }),

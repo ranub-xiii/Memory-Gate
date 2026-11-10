@@ -38,8 +38,8 @@ class MemoryRetrievalTests(unittest.TestCase):
             records, "continue Memory Gate retrieval ranking",
             now=self.NOW, limit=2,
         )
+        self.assertEqual(len(ranked), 1)
         self.assertEqual(ranked[0]["title"], "Memory Gate retrieval")
-        self.assertGreater(ranked[0]["retrieval_score"], ranked[1]["retrieval_score"])
 
     def test_superseded_closed_kill_and_future_records_are_not_active(self):
         records = [
