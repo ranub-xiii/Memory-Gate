@@ -90,7 +90,7 @@ def extract_page_properties(page: Mapping[str, Any]) -> dict[str, Any]:
             result = [x.get("id") for x in value if isinstance(x, dict)]
         else:
             continue
-        if result not in (None, "", []):
+        if kind == "relation" or result not in (None, "", []):
             extracted[name] = result
     return extracted
 

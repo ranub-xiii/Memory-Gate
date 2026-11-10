@@ -251,6 +251,7 @@ class NotionAPIClientTests(unittest.TestCase):
                 "type": "relation",
                 "relation": [{"id": "3f30fddd-05e9-812b-b6e3-caf8ad073dd7"}],
             },
+            "To Memory": {"type": "relation", "relation": []},
             "Email": {"type": "email", "email": "private@example.invalid"},
             "Phone": {"type": "phone_number", "phone_number": "+10000000000"},
         }})
@@ -262,6 +263,7 @@ class NotionAPIClientTests(unittest.TestCase):
             result["From Memory"],
             ["3f30fddd-05e9-812b-b6e3-caf8ad073dd7"],
         )
+        self.assertEqual(result["To Memory"], [])
         self.assertNotIn("Email", result)
         self.assertNotIn("Phone", result)
 
