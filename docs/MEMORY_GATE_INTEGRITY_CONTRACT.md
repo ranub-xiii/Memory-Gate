@@ -50,7 +50,7 @@ This is a read-path guard, not a write API. Any future relation writer must vali
 
 ## 6. Retrieval and time
 
-- UNRESOLVED edges do not suppress records or produce confirmed-conflict warnings.
+- UNRESOLVED edges are omitted from ordinary retrieval entirely. A dedicated investigative view is not implemented in v0.1.
 - ACTIVE CONTRADICTS labels both claims; neither is chosen or hidden.
 - An absent edge is not a negative relationship.
 - A newer recorded_at or updated_at does not imply truth or supersession.

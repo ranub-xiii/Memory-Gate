@@ -208,7 +208,9 @@ def _relation_warnings(
             continue
 
         status = str(props.get("Status", "")).upper()
-        if status in {"REJECTED", "SUPERSEDED"}:
+        if status in {"REJECTED", "SUPERSEDED", "UNRESOLVED"}:
+            # Unresolved edges are omitted from ordinary retrieval entirely.
+            # An investigative view may expose them in a future version.
             continue
 
         source_id = _memory_endpoint_id(props.get("From Memory"))
@@ -254,11 +256,6 @@ def _relation_warnings(
 
         source_record = source_matches[0]
         target_record = target_matches[0]
-
-        if status == "UNRESOLVED":
-            for record in (source_record, target_record):
-                add_warning(record, f"unresolved_relation:{edge}")
-            continue
 
         if status != "ACTIVE":
             for record in (source_record, target_record):

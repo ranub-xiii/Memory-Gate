@@ -113,7 +113,7 @@ class MemoryRetrievalTests(unittest.TestCase):
         )
         self.assertEqual([item["title"] for item in ranked], ["New policy"])
 
-    def test_unresolved_supersedes_relation_warns_without_suppressing(self):
+    def test_unresolved_supersedes_has_no_ordinary_retrieval_effect(self):
         old = self.record("Old policy", Status="VERIFIED")
         new = self.record("New policy", Status="VERIFIED")
         relation = self.relation(new, old, "SUPERSEDES", status="UNRESOLVED")
@@ -124,11 +124,8 @@ class MemoryRetrievalTests(unittest.TestCase):
             {item["title"] for item in ranked},
             {"Old policy", "New policy"},
         )
-        by_title = {item["title"]: item for item in ranked}
         self.assertTrue(all(
-            any(warning.startswith("unresolved_relation:SUPERSEDES:")
-                for warning in item["retrieval_warnings"])
-            for item in by_title.values()
+            item["retrieval_warnings"] == [] for item in ranked
         ))
 
     def test_ambiguous_supersedes_endpoint_warns_without_suppressing(self):
@@ -197,7 +194,7 @@ class MemoryRetrievalTests(unittest.TestCase):
             for warning in ranked[0]["retrieval_warnings"]
         ))
 
-    def test_contradiction_relation_is_explicitly_labelled(self):
+    def test_unresolved_contradiction_has_no_ordinary_retrieval_effect(self):
         first = self.record("Claim A", Status="VERIFIED")
         second = self.record("Claim B", Status="SUPPORTED")
         relation = self.relation(
@@ -207,16 +204,8 @@ class MemoryRetrievalTests(unittest.TestCase):
             [first, second], None, now=self.NOW,
             relations=[relation],
         )
-        self.assertTrue(all(item["retrieval_warnings"] for item in ranked))
         self.assertTrue(all(
-            any(warning.startswith("unresolved_relation:CONTRADICTS:")
-                for warning in item["retrieval_warnings"])
-            for item in ranked
-        ))
-        self.assertTrue(all(
-            not any("conflicting_relation:" in warning
-                    for warning in item["retrieval_warnings"])
-            for item in ranked
+            item["retrieval_warnings"] == [] for item in ranked
         ))
 
     def test_relation_matching_does_not_collapse_distinct_short_suffixes(self):
