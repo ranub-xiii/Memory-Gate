@@ -425,6 +425,10 @@ class NotionMemoryProvider:
                         None, "invalid_page", "page id missing"
                     )
                 properties = extract_page_properties(page)
+                if page.get("created_time") and "Created At" not in properties:
+                    properties["Created At"] = page["created_time"]
+                if page.get("last_edited_time") and "Updated At" not in properties:
+                    properties["Updated At"] = page["last_edited_time"]
                 title = next(
                     (str(value) for key, value in properties.items()
                      if key in ("Title", "Content", "Project", "Relation", "Source")),
@@ -455,11 +459,26 @@ class NotionMemoryProvider:
             )
 
         # Rank metadata first; fetch block bodies only for likely candidates.
-        preselected = rank_memory_records(
+        candidate_limit = min(100, max(max_records * 2, 48))
+        # Metadata ranking improves precision; a recency sample preserves recall
+        # for memories whose useful terms exist only in their Notion page body.
+        metadata_candidates = rank_memory_records(
             records, query, now=float(retrieved_at),
-            limit=min(100, max(max_records * 2, max_records)),
-            relations=relations,
+            limit=max(1, candidate_limit // 2), relations=relations,
         )
+        recent_candidates = rank_memory_records(
+            records, None, now=float(retrieved_at),
+            limit=candidate_limit, relations=relations,
+        )
+        preselected = []
+        seen_ids = set()
+        for candidate in metadata_candidates + recent_candidates:
+            if candidate["id"] in seen_ids:
+                continue
+            seen_ids.add(candidate["id"])
+            preselected.append(candidate)
+            if len(preselected) >= candidate_limit:
+                break
         selected: list[dict[str, Any]] = []
         for record in preselected:
             if record["source_name"] in (

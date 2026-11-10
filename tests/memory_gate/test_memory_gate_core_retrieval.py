@@ -127,6 +127,19 @@ class MemoryRetrievalTests(unittest.TestCase):
         )
         self.assertTrue(all(item["retrieval_warnings"] for item in ranked))
 
+    def test_page_body_terms_contribute_to_ranking(self):
+        records = [
+            self.record("General note", Status="VERIFIED"),
+            {
+                **self.record("Unrelated title", Status="VERIFIED"),
+                "body": "Trnje worker recovery and persistent task state",
+            },
+        ]
+        ranked = rank_memory_records(
+            records, "worker recovery", now=self.NOW, limit=2,
+        )
+        self.assertEqual(ranked[0]["title"], "Unrelated title")
+
     def test_query_with_no_overlap_returns_no_false_match(self):
         records = [self.record("Memory Gate", Topic="Retrieval")]
         ranked = rank_memory_records(
