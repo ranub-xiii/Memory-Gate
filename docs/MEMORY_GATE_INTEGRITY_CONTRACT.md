@@ -40,6 +40,8 @@ For CONTRADICTS, ACTIVE is a curator assertion that the claims share the relevan
 
 PART_OF, DEPENDS_ON, USES, and component-level TESTS are not interpreted as Memory Graph relations in v0.1; they belong in the separate Architecture Graph.
 
+The legacy schema also contains `CONFIRMS`, `KILLS`, `CITES`, `OPENS`, `RELATED_TO`, `SAME_ENTITY`, and `POSSIBLE_MATCH`. These types are not classified by v0.1 and are ignored by the Memory resolver; omission does not assign them to Architecture Graph. All unsupported relation rows remain unchanged in Notion.
+
 ## 5. Cycle invariant
 
 SUPERSEDES and DERIVED_FROM are separate directed acyclic relations. Other relation types are not globally forced to be acyclic.
@@ -53,6 +55,7 @@ This is a read-path guard, not a write API. Any future relation writer must vali
 - UNRESOLVED edges are omitted from ordinary retrieval entirely. A dedicated investigative view is not implemented in v0.1.
 - ACTIVE CONTRADICTS labels both claims; neither is chosen or hidden.
 - An absent edge is not a negative relationship.
+- Unsupported or unclassified legacy relation types have no Memory Graph retrieval effect and are not rewritten or reclassified by omission.
 - A newer recorded_at or updated_at does not imply truth or supersession.
 - Storage, repeated retrieval, similarity, or graph adjacency does not increase truth status.
 - recorded_at, observed_at, valid_from, and valid_until are distinct. Current Notion Created At and Updated At values are not validity intervals.

@@ -373,6 +373,95 @@ class MemoryRetrievalTests(unittest.TestCase):
         self.assertTrue(all(item["retrieval_warnings"] == [] for item in ranked))
 
 
+    def test_self_supersedes_cycle_keeps_superseded_record_visible(self):
+        record = self.record(
+            "Self-superseding policy",
+            Status="SUPERSEDED",
+            **{"Superseded By": "Self-superseding policy"},
+        )
+        relation = self.relation(record, record, "SUPERSEDES")
+        ranked = rank_memory_records(
+            [record], None, now=self.NOW, relations=[relation],
+        )
+        self.assertEqual([item["id"] for item in ranked], [record["id"]])
+        self.assertTrue(any(
+            warning.startswith("cycle_relation:SUPERSEDES:")
+            for warning in ranked[0]["retrieval_warnings"]
+        ))
+        self.assertFalse(any(
+            warning.startswith("superseded_by_relation:")
+            for warning in ranked[0]["retrieval_warnings"]
+        ))
+
+    def test_derived_from_self_cycle_is_reported_without_removal(self):
+        record = self.record("Self-derived result", Status="VERIFIED")
+        relation = self.relation(record, record, "DERIVED_FROM")
+        ranked = rank_memory_records(
+            [record], None, now=self.NOW, relations=[relation],
+        )
+        self.assertEqual([item["id"] for item in ranked], [record["id"]])
+        self.assertTrue(any(
+            warning.startswith("cycle_relation:DERIVED_FROM:")
+            for warning in ranked[0]["retrieval_warnings"]
+        ))
+
+    def test_edges_touching_cycle_participants_cannot_suppress_other_nodes(self):
+        first = self.record("Cycle A", Status="VERIFIED")
+        second = self.record("Cycle B", Status="VERIFIED")
+        incoming = self.record("Incoming C", Status="VERIFIED")
+        outgoing = self.record("Outgoing D", Status="VERIFIED")
+        relations = [
+            self.relation(first, second, "SUPERSEDES"),
+            self.relation(second, first, "SUPERSEDES"),
+            self.relation(incoming, first, "SUPERSEDES"),
+            self.relation(first, outgoing, "SUPERSEDES"),
+        ]
+        ranked = rank_memory_records(
+            [first, second, incoming, outgoing], None,
+            now=self.NOW, relations=relations,
+        )
+        by_id = {item["id"]: item for item in ranked}
+        self.assertEqual(
+            set(by_id), {first["id"], second["id"], incoming["id"], outgoing["id"]}
+        )
+        for record in (first, second):
+            self.assertTrue(any(
+                warning.startswith("cycle_relation:SUPERSEDES:")
+                for warning in by_id[record["id"]]["retrieval_warnings"]
+            ))
+        for record in (first, incoming, outgoing):
+            self.assertTrue(any(
+                warning.startswith("cycle_blocked_relation:SUPERSEDES:")
+                for warning in by_id[record["id"]]["retrieval_warnings"]
+            ))
+        self.assertFalse(any(
+            warning.startswith("superseded_by_relation:")
+            for item in ranked for warning in item["retrieval_warnings"]
+        ))
+
+    def test_unclassified_relation_types_have_no_memory_graph_effect(self):
+        first = self.record("Legacy source", Status="VERIFIED")
+        second = self.record("Legacy target", Status="VERIFIED")
+        unclassified = (
+            "DEPENDS_ON", "RELATED_TO", "CONFIRMS", "KILLS",
+            "OPENS", "CITES", "SAME_ENTITY", "POSSIBLE_MATCH",
+            "PART_OF", "TESTS", "USES",
+        )
+        for relation_type in unclassified:
+            with self.subTest(relation_type=relation_type):
+                relation = self.relation(first, second, relation_type)
+                ranked = rank_memory_records(
+                    [first, second], None, now=self.NOW,
+                    relations=[relation],
+                )
+                self.assertEqual(
+                    {item["id"] for item in ranked},
+                    {first["id"], second["id"]},
+                )
+                self.assertTrue(all(
+                    item["retrieval_warnings"] == [] for item in ranked
+                ))
+
     def test_contradicted_and_unknown_records_are_not_silently_promoted(self):
         records = [
             self.record("Unresolved memory", Status="CONTRADICTED"),

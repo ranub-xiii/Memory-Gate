@@ -22,6 +22,10 @@
 - `memory_gate_core/audit_log.py` and `privacy.py`: append-only audit records, integrity checks, and sensitive-data redaction.
 - `memory_gate_core/server.py`: loopback-first HTTP entry point and environment-based construction.
 
+## Legacy relation audit
+
+See [MEMORY_GATE_LEGACY_RELATION_AUDIT.md](MEMORY_GATE_LEGACY_RELATION_AUDIT.md) for the 2026-11-10 read-only audit of the nine existing Notion relation rows. No rows were migrated; one Memory Graph candidate remains pending scope review.
+
 ## Relation integrity contract
 
 See docs/MEMORY_GATE_INTEGRITY_CONTRACT.md for endpoint identity, edge states, provenance, relation directions, graph separation, cycle handling, and retrieval rules. Existing Notion endpoint properties remain text fields. This implementation accepts explicit mem:<Notion page UUID> values without migrating existing rows or changing the Notion schema.
