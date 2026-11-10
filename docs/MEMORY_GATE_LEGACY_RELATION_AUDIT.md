@@ -16,6 +16,8 @@ The relation data source contained 9 rows at the time of inspection. All 9 had `
 
 The Memory Archive contained 4 pages.
 
+Endpoint-title reconciliation across the 18 stored endpoint values found **3 exact matches**, **15 unmatched labels**, and **0 ambiguous matches**. Two matches are the source and target of the SUPPORTS candidate above; the third is the source endpoint of the PART_OF row. This comparison is an audit measurement only; runtime resolution does not use titles.
+
 ## Candidate Memory Graph edge — not migrated
 
 One `SUPPORTS` row has endpoint labels that exactly identify two distinct Memory Archive pages. The stable Notion page IDs were confirmed by fetching the relation and both archive pages:

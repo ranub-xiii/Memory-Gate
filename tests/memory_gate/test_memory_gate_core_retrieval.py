@@ -259,11 +259,14 @@ class MemoryRetrievalTests(unittest.TestCase):
         )
         by_id = {item["id"]: item for item in ranked}
         self.assertEqual(set(by_id), {old["id"], new["id"]})
-        self.assertTrue(all(any(
+        self.assertTrue(any(
             "unresolved_relation_endpoint:SUPERSEDES:" in warning
             and "from_missing_identity" in warning
-            for warning in item["retrieval_warnings"]
-        ) for item in ranked))
+            for warning in by_id[old["id"]]["retrieval_warnings"]
+        ))
+        # The source page cannot be identified from an empty endpoint list;
+        # attaching the warning to it would invent an identity association.
+        self.assertEqual(by_id[new["id"]]["retrieval_warnings"], [])
 
     def test_title_text_is_not_accepted_as_endpoint_identity(self):
         old = self.record("Old policy", Status="VERIFIED")
