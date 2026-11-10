@@ -10,7 +10,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
-_TOKEN = re.compile(r"[^\\W_]+", re.UNICODE)
+_TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
 _STOP = frozenset({
     "a", "about", "after", "all", "also", "an", "and", "any", "are",
     "as", "at", "be", "been", "before", "but", "by", "can", "could",
