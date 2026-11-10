@@ -86,7 +86,7 @@ def _relation_warnings(
         for record, keys in indexed:
             if source in keys or target in keys:
                 warnings.setdefault(id(record), []).append(
-                    f"unresolved_relation:{relation_type}:{props.get('From Memory')}->{props.get('To Memory')}"
+                    f"conflicting_relation:{relation_type}:{props.get('From Memory')}->{props.get('To Memory')}"
                 )
     return warnings, superseded
 

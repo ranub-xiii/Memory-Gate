@@ -90,7 +90,7 @@ class MemoryRetrievalTests(unittest.TestCase):
         )
         self.assertTrue(all(item["retrieval_warnings"] for item in ranked))
         self.assertTrue(all(
-            "unresolved_relation:CONTRADICTS" in item["retrieval_warnings"][0]
+            "conflicting_relation:CONTRADICTS" in item["retrieval_warnings"][0]
             for item in ranked
         ))
 

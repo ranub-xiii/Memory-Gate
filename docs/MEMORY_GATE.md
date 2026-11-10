@@ -34,9 +34,9 @@
 
 ## Deferred work
 
-1. Durable single-use nonce/replay prevention with atomic consumption.
-2. Relevance-ranked retrieval over the Notion memory graph and explicit contradiction handling.
-3. Temporal validity and supersession semantics in memory records.
+1. Semantic/vector retrieval evaluation against a labelled relevance set; current retrieval is deterministic lexical ranking, not embedding search.
+2. Explicit valid-from/valid-until fields and richer temporal semantics; the current archive schema exposes creation/update timestamps and supersession fields, but no validity interval.
+3. Durable single-use nonce consumption across processes; idempotency prevents duplicate service requests, but the signed nonce itself is not independently consumed.
 4. Live Notion and OpenAI integration tests in a controlled environment.
 5. Deployment-level bypass, credential-isolation, TLS, rate-limit, and recovery tests.
 

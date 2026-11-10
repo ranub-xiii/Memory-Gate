@@ -50,8 +50,8 @@ class FakeMemoryProvider:
         self.error = error
         self.calls = []
 
-    def retrieve(self, subject_id):
-        self.calls.append(subject_id)
+    def retrieve(self, subject_id, *, query=None):
+        self.calls.append((subject_id, query))
         if self.error:
             raise self.error
         return self.snapshot
