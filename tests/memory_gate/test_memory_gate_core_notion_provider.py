@@ -247,6 +247,10 @@ class NotionAPIClientTests(unittest.TestCase):
             "Notes": {
                 "type": "rich_text", "rich_text": [{"plain_text": "detail"}]
             },
+            "From Memory": {
+                "type": "relation",
+                "relation": [{"id": "3f30fddd-05e9-812b-b6e3-caf8ad073dd7"}],
+            },
             "Email": {"type": "email", "email": "private@example.invalid"},
             "Phone": {"type": "phone_number", "phone_number": "+10000000000"},
         }})
@@ -254,6 +258,10 @@ class NotionAPIClientTests(unittest.TestCase):
         self.assertEqual(result["Status"], "VERIFIED")
         self.assertEqual(result["Tags"], ["memory"])
         self.assertEqual(result["Notes"], "detail")
+        self.assertEqual(
+            result["From Memory"],
+            ["3f30fddd-05e9-812b-b6e3-caf8ad073dd7"],
+        )
         self.assertNotIn("Email", result)
         self.assertNotIn("Phone", result)
 

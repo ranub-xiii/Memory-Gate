@@ -104,13 +104,26 @@ def _canonical_page_id(value: object) -> str | None:
         return None
 
 
-def _memory_endpoint_id(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    candidate = value.strip()
-    if candidate[:4].casefold() != "mem:":
-        return None
-    return _canonical_page_id(candidate[4:].strip())
+def _memory_endpoint_ids(value: object) -> tuple[str, ...] | None:
+    """Parse a text mem: UUID or Notion relation property ID list.
+
+    None means malformed/unrecognized input; an empty tuple means no linked
+    page; more than one ID is preserved so the caller can reject ambiguity.
+    """
+    if isinstance(value, str):
+        candidate = value.strip()
+        if candidate[:4].casefold() != "mem:":
+            return None
+        page_id = _canonical_page_id(candidate[4:].strip())
+        return (page_id,) if page_id is not None else None
+    if isinstance(value, list):
+        if not value:
+            return ()
+        page_ids = tuple(_canonical_page_id(item) for item in value)
+        if any(page_id is None for page_id in page_ids):
+            return None
+        return page_ids  # type: ignore[return-value]
+    return None
 
 
 def _cyclic_components(
@@ -213,12 +226,13 @@ def _relation_warnings(
             # An investigative view may expose them in a future version.
             continue
 
-        source_id = _memory_endpoint_id(props.get("From Memory"))
-        target_id = _memory_endpoint_id(props.get("To Memory"))
-        source_matches = indexed.get(source_id, []) if source_id else []
-        target_matches = indexed.get(target_id, []) if target_id else []
+        source_ids = _memory_endpoint_ids(props.get("From Memory"))
+        target_ids = _memory_endpoint_ids(props.get("To Memory"))
+        endpoint_ids = tuple(source_ids or ()) + tuple(target_ids or ())
         candidates = {
-            id(record): record for record in source_matches + target_matches
+            id(record): record
+            for page_id in endpoint_ids
+            for record in indexed.get(page_id, [])
         }
         relation_id = _canonical_page_id(relation.get("id"))
         edge = (
@@ -227,19 +241,35 @@ def _relation_warnings(
             f"[edge_id={relation_id or 'missing'}]"
         )
 
-        invalid_sides = []
-        if source_id is None:
-            invalid_sides.append("from_identity")
-        if target_id is None:
-            invalid_sides.append("to_identity")
-        if invalid_sides:
+        endpoint_errors: list[str] = []
+        endpoint_ambiguous = False
+        for side, page_ids in (
+            ("from", source_ids), ("to", target_ids)
+        ):
+            if page_ids is None:
+                endpoint_errors.append(f"{side}_identity")
+            elif not page_ids:
+                endpoint_errors.append(f"{side}_missing_identity")
+            elif len(page_ids) > 1:
+                endpoint_ambiguous = True
+
+        if endpoint_ambiguous:
+            for record in candidates.values():
+                add_warning(record, f"ambiguous_relation_endpoint:{edge}")
+            continue
+        if endpoint_errors:
             for record in candidates.values():
                 add_warning(
                     record,
                     f"unresolved_relation_endpoint:{edge}:"
-                    + ",".join(invalid_sides),
+                    + ",".join(endpoint_errors),
                 )
             continue
+
+        source_id = source_ids[0]
+        target_id = target_ids[0]
+        source_matches = indexed.get(source_id, [])
+        target_matches = indexed.get(target_id, [])
 
         if len(source_matches) > 1 or len(target_matches) > 1:
             for record in candidates.values():

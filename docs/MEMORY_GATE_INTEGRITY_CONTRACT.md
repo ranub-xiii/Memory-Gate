@@ -14,15 +14,15 @@ Scope: Memory Graph only. No new service, database, or third graph.
 
 ## 2. Stable identity
 
-Memory Graph node identity is the Notion page UUID. Relation endpoint text must use mem:<Notion page UUID>.
+Memory Graph node identity is the Notion page UUID. Existing text endpoint values use the explicit `mem:<Notion page UUID>` namespace. When Notion native relation properties are supplied by the provider, their extracted page-ID arrays are accepted as an alternative.
 
-The resolver accepts only this namespace and a valid UUID; it resolves only against Memory Archive records; and it requires exactly one page per endpoint. Titles, text similarity, display labels, and the auto-increment Memory ID are never identity. Same title with different UUIDs means different nodes. Title changes do not change identity. Duplicate page IDs are ambiguous and block activation.
+The resolver resolves only against Memory Archive records and requires exactly one page ID and exactly one matching page per endpoint. A native relation array with zero IDs is missing; an array with multiple IDs is ambiguous and blocked. Malformed IDs are blocked. Titles, text similarity, display labels, and the auto-increment Memory ID are never identity. Same title with different UUIDs means different nodes. Title changes do not change identity. Duplicate page IDs are ambiguous and block activation.
 
-The existing From Memory and To Memory properties are text fields. They can carry explicit IDs without a schema change. Legacy title-valued rows are not rewritten or guessed into IDs.
+The current Notion From Memory and To Memory properties are still text fields. The provider already extracts native Notion relation properties as arrays of page IDs, and the resolver now accepts those arrays without a schema migration. Legacy title-valued rows are not rewritten or guessed into IDs.
 
 ## 3. Activation and provenance
 
-An edge affects ordinary retrieval only when both endpoints are explicit mem: UUIDs and each resolves uniquely to a Memory Archive page; the relation type is supported; status is exactly ACTIVE; the relation row has a valid Notion UUID; Evidence is non-empty; and direction/type invariants hold.
+An edge affects ordinary retrieval only when both endpoints are either explicit mem: UUID strings or single-ID native Notion relation arrays, and each resolves uniquely to a Memory Archive page; the relation type is supported; status is exactly ACTIVE; the relation row has a valid Notion UUID; Evidence is non-empty; and direction/type invariants hold.
 
 Missing or invalid endpoints, ambiguous IDs, missing evidence, missing relation identity, or invalid status block activation. A warning is attached where an endpoint record can be identified. Evidence metadata is provenance, not proof that the claim is true.
 
@@ -70,6 +70,8 @@ No existing Notion relation rows are migrated, renamed, deleted, or reclassified
 
 - title-only endpoints do not resolve or suppress;
 - valid mem: UUID endpoints resolve exactly one page each;
+- single-ID native Notion relation arrays resolve exactly one page each;
+- empty or multi-ID native relation arrays are blocked without guessing;
 - same title with different UUIDs remains two distinct nodes;
 - missing or duplicate page identity blocks activation;
 - UNRESOLVED CONTRADICTS does not become a confirmed conflict;

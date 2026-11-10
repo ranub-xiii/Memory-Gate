@@ -222,6 +222,49 @@ class MemoryRetrievalTests(unittest.TestCase):
         self.assertTrue(by_title["Claim B"]["retrieval_warnings"])
         self.assertEqual(by_title["Claim C"]["retrieval_warnings"], [])
 
+    def test_native_notion_relation_id_arrays_resolve_single_endpoints(self):
+        old = self.record("Old native relation target", Status="VERIFIED")
+        new = self.record("New native relation source", Status="VERIFIED")
+        relation = self.relation(new, old, "SUPERSEDES")
+        relation["properties"]["From Memory"] = [new["id"]]
+        relation["properties"]["To Memory"] = [old["id"]]
+        ranked = rank_memory_records(
+            [old, new], None, now=self.NOW, relations=[relation],
+        )
+        self.assertEqual([item["id"] for item in ranked], [new["id"]])
+
+    def test_native_notion_relation_with_multiple_ids_is_ambiguous(self):
+        first = self.record("Ambiguous source one", Status="VERIFIED")
+        second = self.record("Ambiguous source two", Status="VERIFIED")
+        old = self.record("Target must remain visible", Status="VERIFIED")
+        relation = self.relation(first, old, "SUPERSEDES")
+        relation["properties"]["From Memory"] = [first["id"], second["id"]]
+        ranked = rank_memory_records(
+            [first, second, old], None, now=self.NOW, relations=[relation],
+        )
+        by_id = {item["id"]: item for item in ranked}
+        self.assertEqual(set(by_id), {first["id"], second["id"], old["id"]})
+        self.assertTrue(all(any(
+            warning.startswith("ambiguous_relation_endpoint:SUPERSEDES:")
+            for warning in item["retrieval_warnings"]
+        ) for item in ranked))
+
+    def test_empty_native_notion_relation_is_blocked(self):
+        old = self.record("Target with empty source relation", Status="VERIFIED")
+        new = self.record("Source with empty relation property", Status="VERIFIED")
+        relation = self.relation(new, old, "SUPERSEDES")
+        relation["properties"]["From Memory"] = []
+        ranked = rank_memory_records(
+            [old, new], None, now=self.NOW, relations=[relation],
+        )
+        by_id = {item["id"]: item for item in ranked}
+        self.assertEqual(set(by_id), {old["id"], new["id"]})
+        self.assertTrue(all(any(
+            "unresolved_relation_endpoint:SUPERSEDES:" in warning
+            and "from_missing_identity" in warning
+            for warning in item["retrieval_warnings"]
+        ) for item in ranked))
+
     def test_title_text_is_not_accepted_as_endpoint_identity(self):
         old = self.record("Old policy", Status="VERIFIED")
         new = self.record("New policy", Status="VERIFIED")

@@ -15,7 +15,7 @@
 
 - `memory_gate_core/memory_gate.py`: admission checks, request/snapshot structures, signed token, controlled execution.
 - `memory_gate_core/notion_memory_provider.py`: read-only Notion adapter with bounded 429/5xx/network retries, metadata-first retrieval with a recency fallback for body-only matches, ranked bounded snapshot construction.
-- `memory_gate_core/retrieval.py`: deterministic lexical ranking, English/Croatian historical-intent recognition and stop words, source-aware status/type labelling, future-record rejection, and identity-safe relation handling. Relation endpoints require explicit mem:<Notion page UUID> values and resolve only against Memory Archive. SUPERSEDES and DERIVED_FROM cycles are detected without suppressing participants.
+- `memory_gate_core/retrieval.py`: deterministic lexical ranking, English/Croatian historical-intent recognition and stop words, source-aware status/type labelling, future-record rejection, and identity-safe relation handling. Relation endpoints accept explicit mem:<Notion page UUID> text or a single-ID native Notion relation array, and resolve only against Memory Archive. Empty/multi-ID arrays are blocked. SUPERSEDES and DERIVED_FROM cycles are detected without suppressing participants.
 - `memory_gate_core/openai_responses_client.py`: constrained Responses API adapter.
 - `memory_gate_core/memory_gate_service.py`: orchestration, authentication, idempotency, and result classification.
 - `memory_gate_core/idempotency.py`: persistent SQLite request claims and terminal state.
