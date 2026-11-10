@@ -375,7 +375,6 @@ def rank_memory_records(
         record_type = str(props.get("Type", "")).upper()
         title = str(record.get("title", ""))
         superseded_by = props.get("Superseded By")
-        keys = _record_keys(record)
         cycle_participant = any(
             warning.startswith("cycle_relation:SUPERSEDES:")
             for warning in relation_warnings.get(id(record), [])
