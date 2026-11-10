@@ -102,7 +102,7 @@ class MemoryGateService:
             return self._existing_result(claim, request_id, audit_ref)
 
         try:
-            snapshot = self.memory_provider.retrieve(self.subject_id)
+            snapshot = self.memory_provider.retrieve(\n                self.subject_id, query=user_input\n            )
         except Exception:
             gate_request = GateRequest(
                 request_id, self.subject_id, client_digest

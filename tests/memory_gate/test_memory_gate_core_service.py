@@ -114,7 +114,7 @@ class MemoryGateServiceTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body["status"], "PASS")
         self.assertEqual(body["output_text"], "gated answer")
-        self.assertEqual(self.provider.calls, ["subject-1"])
+        self.assertEqual(self.provider.calls, [("subject-1", "continue the project")])
         self.assertEqual(len(self.opener.requests), 1)
         self.assertEqual(
             self.store.get(self.key, self.service_digest(self.payload)),

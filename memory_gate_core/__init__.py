@@ -11,13 +11,13 @@ from .notion_memory_provider import (
     NotionAPIClient, NotionAPIError, NotionMemoryProvider,
     extract_page_properties,
 )
-from .openai_responses_client import OpenAIAPIError, OpenAIResponsesClient
+from .openai_responses_client import OpenAIAPIError, OpenAIResponsesClient\nfrom .retrieval import rank_memory_records
 
 __all__ = [
     "DurableAuditLog", "GateDecision", "GateExecution", "GateRequest",
     "IdempotencyConflict", "IdempotencyError", "InvocationOutcomeUnknown",
     "MemoryGate", "MemoryGateService", "MemorySnapshot", "NotionAPIClient",
     "NotionAPIError", "NotionMemoryProvider", "OpenAIAPIError",
-    "OpenAIResponsesClient", "SQLiteIdempotencyStore",
+    "OpenAIResponsesClient", "SQLiteIdempotencyStore", "rank_memory_records",
     "extract_page_properties",
 ]
