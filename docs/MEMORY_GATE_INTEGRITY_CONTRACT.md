@@ -24,7 +24,7 @@ The current Notion From Memory and To Memory properties are still text fields. T
 
 An edge affects ordinary retrieval only when both endpoints are either explicit mem: UUID strings or single-ID native Notion relation arrays, and each resolves uniquely to a Memory Archive page; the relation type is supported; status is exactly ACTIVE; the relation row has a valid Notion UUID; Evidence is non-empty; and direction/type invariants hold.
 
-Missing or invalid endpoints, ambiguous IDs, missing evidence, missing relation identity, or invalid status block activation. A warning is attached where an endpoint record can be identified. Evidence metadata is provenance, not proof that the claim is true.
+Missing or invalid endpoints, ambiguous IDs, missing evidence text, missing relation identity, or invalid status block activation. A warning is attached where an endpoint record can be identified. `Evidence` is unstructured free text in v0.1; runtime checks only that it is non-empty. It does not verify that the value resolves to a source page, URL, artifact, or observed event. Treat it as a curator-supplied provenance note, not a validated evidence chain and not proof that the claim is true.
 
 ## 4. Memory Graph relation semantics
 
@@ -37,6 +37,8 @@ Missing or invalid endpoints, ambiguous IDs, missing evidence, missing relation 
 | DERIVED_FROM | derived record to source record | provenance relation; must be acyclic; suppresses neither record |
 
 For CONTRADICTS, ACTIVE is a curator assertion that the claims share the relevant scope and are incompatible. The current schema has no structured scope or validity fields. Runtime does not infer contradiction from text, similarity, dates, or negation. Candidates remain UNRESOLVED until that review occurs.
+
+Direction convention: `From Memory` is the source and `To Memory` is the target. Runtime applies the fixed direction defined for each supported relation, but it does not infer whether the endpoint record's Type semantically fits the source or target role. Endpoint role, shared scope and valid-time compatibility remain curation decisions; the current schema has no structured fields for those checks.
 
 PART_OF, DEPENDS_ON, USES, and component-level TESTS are not interpreted as Memory Graph relations in v0.1; they belong in the separate Architecture Graph.
 
