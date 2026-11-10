@@ -3,7 +3,7 @@ import json
 import unittest
 from http.client import HTTPMessage
 from unittest.mock import patch
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 from memory_gate_core.notion_memory_provider import (
     NotionAPIClient,
@@ -161,6 +161,81 @@ class NotionAPIClientTests(unittest.TestCase):
         )
         self.assertEqual(client.query_data_source("ds"), [])
         self.assertEqual(len(opener.requests), 2)
+
+    def test_transient_server_errors_retry_with_bounded_backoff(self):
+        for status, code in (
+            (500, "internal_server_error"),
+            (502, "bad_gateway"),
+            (503, "service_unavailable"),
+            (504, "gateway_timeout"),
+            (529, "service_overload"),
+        ):
+            with self.subTest(status=status):
+                error = HTTPError(
+                    "https://api.notion.com", status, "Temporary failure",
+                    HTTPMessage(), io.BytesIO(
+                        json.dumps({"code": code}).encode("utf-8")
+                    ),
+                )
+                opener = FakeOpener([
+                    error, FakeResponse({"results": [], "has_more": False})
+                ])
+                delays = []
+                client = NotionAPIClient(
+                    "token", opener=opener, sleeper=delays.append,
+                    min_interval=0, max_retries=1,
+                )
+                with patch(
+                    "memory_gate_core.notion_memory_provider.random.uniform",
+                    return_value=0.0,
+                ):
+                    self.assertEqual(client.query_data_source("ds"), [])
+                self.assertEqual(len(opener.requests), 2)
+                self.assertEqual(delays, [0.25])
+
+    def test_transient_network_error_retries_with_backoff(self):
+        opener = FakeOpener([
+            URLError("temporary network issue"),
+            FakeResponse({"results": [], "has_more": False}),
+        ])
+        delays = []
+        client = NotionAPIClient(
+            "token", opener=opener, sleeper=delays.append,
+            min_interval=0, max_retries=1,
+        )
+        with patch(
+            "memory_gate_core.notion_memory_provider.random.uniform",
+            return_value=0.0,
+        ):
+            self.assertEqual(client.query_data_source("ds"), [])
+        self.assertEqual(len(opener.requests), 2)
+        self.assertEqual(delays, [0.25])
+
+    def test_transient_server_error_exhausts_only_bounded_retries(self):
+        errors = [
+            HTTPError(
+                "https://api.notion.com", 503, "Temporary failure",
+                HTTPMessage(), io.BytesIO(b'{"code":"service_unavailable"}'),
+            )
+            for _ in range(3)
+        ]
+        opener = FakeOpener(errors)
+        delays = []
+        client = NotionAPIClient(
+            "token", opener=opener, sleeper=delays.append,
+            min_interval=0, max_retries=2,
+        )
+        with patch(
+            "memory_gate_core.notion_memory_provider.random.uniform",
+            return_value=0.0,
+        ):
+            with self.assertRaises(NotionAPIError) as raised:
+                client.query_data_source("ds")
+        self.assertEqual(raised.exception.status, 503)
+        self.assertEqual(raised.exception.code, "service_unavailable")
+        self.assertNotIn("Temporary failure", str(raised.exception))
+        self.assertEqual(len(opener.requests), 3)
+        self.assertEqual(delays, [0.25, 0.5])
 
     def test_page_properties_extract_common_types(self):
         result = extract_page_properties({"properties": {

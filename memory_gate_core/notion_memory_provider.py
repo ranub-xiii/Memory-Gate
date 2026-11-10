@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import random
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -130,6 +131,8 @@ def _block_text(block: Mapping[str, Any]) -> str:
 class NotionAPIClient:
     """Small read-only Notion REST client with pagination and rate limiting."""
 
+    _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504, 529})
+
     def __init__(
         self,
         token: str,
@@ -171,6 +174,22 @@ class NotionAPIClient:
                 self.sleeper(delay)
             self._last_request = self.monotonic()
 
+    def _retry_delay(self, headers: Mapping[str, Any] | None, attempt: int) -> float:
+        """Return a bounded Retry-After or exponential delay with jitter."""
+        delay = None
+        if headers is not None:
+            try:
+                raw = headers.get("Retry-After")
+                if raw is not None:
+                    delay = float(raw)
+            except (TypeError, ValueError):
+                delay = None
+        if delay is None or not math.isfinite(delay):
+            delay = min(0.25 * (2 ** attempt), 4.0)
+        delay = min(max(delay, 0.1), 4.5)
+        jitter = random.uniform(0.0, min(delay * 0.2, 0.5))
+        return min(delay + jitter, 5.0)
+
     def _request(
         self, method: str, path: str, body: Mapping[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -195,20 +214,29 @@ class NotionAPIClient:
             except HTTPError as error:
                 status = error.code
                 raw = error.read()
-                if status == 429 and attempt < self.max_retries:
-                    try:
-                        headers = error.headers or {}
-                        delay = float(headers.get("Retry-After", "1"))
-                    except (TypeError, ValueError):
-                        delay = 1.0
-                    self.sleeper(min(max(delay, 0.1), 5.0))
+                if (
+                    status in self._RETRYABLE_STATUSES
+                    and attempt < self.max_retries
+                ):
+                    self.sleeper(
+                        self._retry_delay(error.headers or {}, attempt)
+                    )
                     continue
                 raise self._api_error(status, raw) from None
             except (URLError, TimeoutError, OSError) as error:
+                if attempt < self.max_retries:
+                    self.sleeper(self._retry_delay(None, attempt))
+                    continue
                 raise NotionAPIError(
                     None, "network_error", type(error).__name__
                 ) from None
             if status >= 400:
+                if (
+                    status in self._RETRYABLE_STATUSES
+                    and attempt < self.max_retries
+                ):
+                    self.sleeper(self._retry_delay(None, attempt))
+                    continue
                 raise self._api_error(status, raw)
             try:
                 result = json.loads(raw.decode("utf-8"))

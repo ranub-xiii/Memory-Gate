@@ -14,7 +14,7 @@
 ## Package layout
 
 - `memory_gate_core/memory_gate.py`: admission checks, request/snapshot structures, signed token, controlled execution.
-- `memory_gate_core/notion_memory_provider.py`: read-only Notion adapter, metadata-first retrieval with a recency fallback for body-only matches, ranked bounded snapshot construction.
+- `memory_gate_core/notion_memory_provider.py`: read-only Notion adapter with bounded 429/5xx/network retries, metadata-first retrieval with a recency fallback for body-only matches, ranked bounded snapshot construction.
 - `memory_gate_core/retrieval.py`: deterministic lexical ranking, English/Croatian historical-intent recognition and stop words, source-aware status/type labelling, future-record rejection, active supersession filtering, and explicit warnings for unresolved, ambiguous, or conflicting relation edges.
 - `memory_gate_core/openai_responses_client.py`: constrained Responses API adapter.
 - `memory_gate_core/memory_gate_service.py`: orchestration, authentication, idempotency, and result classification.
