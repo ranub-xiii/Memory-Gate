@@ -148,6 +148,20 @@ class MemoryRetrievalTests(unittest.TestCase):
         )
         self.assertEqual(ranked, [])
 
+    def test_refuted_records_are_retrievable_only_in_historical_context(self):
+        records = [
+            self.record("Refuted model", Status="REFUTED"),
+            self.record("Current model", Status="VERIFIED"),
+        ]
+        normal = rank_memory_records(
+            records, "model", now=self.NOW, limit=5,
+        )
+        historical = rank_memory_records(
+            records, "why refuted model", now=self.NOW, limit=5,
+        )
+        self.assertNotIn("Refuted model", [item["title"] for item in normal])
+        self.assertIn("Refuted model", [item["title"] for item in historical])
+
     def test_historical_query_still_rejects_future_dated_records(self):
         records = [
             self.record("Old policy", Status="SUPERSEDED"),

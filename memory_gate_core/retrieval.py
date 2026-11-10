@@ -25,7 +25,8 @@ _INACTIVE = frozenset({"SUPERSEDED", "KILL", "CLOSED", "REFUTED"})
 _CONFLICTING = frozenset({"CONTRADICTS", "REFUTES", "KILLS"})
 _HISTORICAL_TERMS = frozenset({
     "history", "historical", "previous", "former", "superseded",
-    "closed", "old", "past", "archive",
+    "closed", "old", "past", "archive", "refuted", "rejected",
+    "killed", "kill", "supersession",
 })
 
 
@@ -60,7 +61,10 @@ def _record_keys(record: Mapping[str, Any]) -> set[str]:
     props = record.get("properties")
     props = props if isinstance(props, Mapping) else {}
     values = [record.get("id"), record.get("title"), props.get("Memory ID")]
-    return {key for value in values if (key := _norm(str(value)))}
+    return {
+        key for value in values
+        if value not in (None, "") and (key := _norm(str(value)))
+    }
 
 
 def _relation_warnings(
