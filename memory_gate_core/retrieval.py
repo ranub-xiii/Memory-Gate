@@ -105,7 +105,13 @@ def _relation_warnings(
 ) -> tuple[dict[int, list[str]], set[int]]:
     warnings: dict[int, list[str]] = {}
     superseded: set[int] = set()
-    indexed = [(record, _record_keys(record)) for record in records]
+    # Memory Relations is defined as edges between Memory Archive records.
+    # Other sources may reuse the same titles, but are not valid graph endpoints.
+    indexed = [
+        (record, _record_keys(record))
+        for record in records
+        if record.get("source_name") == "Memory Archive"
+    ]
 
     def add_warning(record: Mapping[str, Any], warning: str) -> None:
         warnings.setdefault(id(record), []).append(warning)
