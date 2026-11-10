@@ -22,6 +22,8 @@ class MemoryGateTests(unittest.TestCase):
             max_age_seconds=300, token_ttl_seconds=60,
             max_context_bytes=1024, clock=lambda: self.now,
         )
+        self.consumed_nonces = set()
+        self.gate.set_nonce_consumer(self.consume_nonce)
         self.request = GateRequest(
             "req-1", "user-1",
             GateRequest.digest_payload({"input": "hello", "model": "test"}),
@@ -30,6 +32,12 @@ class MemoryGateTests(unittest.TestCase):
             "user-1", ("notion-page-1",), "approved memory context",
             self.now - 5, "notion-version-7",
         )
+
+    def consume_nonce(self, nonce, expires_at):
+        if expires_at <= self.now or nonce in self.consumed_nonces:
+            return False
+        self.consumed_nonces.add(nonce)
+        return True
 
     def test_valid_context_issues_bound_token(self):
         decision = self.gate.authorize(self.request, self.snapshot)
@@ -202,6 +210,21 @@ class MemoryGateTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0][1], self.snapshot.content)
 
+    def test_execute_fails_closed_without_nonce_consumer(self):
+        calls = []
+        gate = MemoryGate(
+            self.KEY, policy_version="v1",
+            audit_sink=self.events.append,
+            clock=lambda: self.now,
+        )
+        result = gate.execute(
+            self.request, self.snapshot,
+            lambda *args: calls.append(args),
+        )
+        self.assertEqual(result.status, "BLOCKED")
+        self.assertEqual(result.decision.reason, "issued_token_invalid")
+        self.assertEqual(calls, [])
+
     def test_model_error_is_recorded(self):
         def broken_model(*args):
             raise RuntimeError("provider unavailable")
@@ -238,6 +261,7 @@ class MemoryGateTests(unittest.TestCase):
             self.KEY, policy_version="v1", audit_sink=audit,
             clock=lambda: self.now,
         )
+        gate.set_nonce_consumer(lambda nonce, expiry: True)
         result = gate.execute(self.request, self.snapshot, model)
         self.assertEqual(result.status, "UNKNOWN")
         self.assertEqual(len(calls), 1)

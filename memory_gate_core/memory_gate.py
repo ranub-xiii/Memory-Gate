@@ -144,8 +144,9 @@ class GateExecution:
 class MemoryGate:
     """Issue short-lived request-bound tokens only after memory and audit pass.
 
-    Production audit sinks must be durable. This component controls only calls
-    made through `execute`; host isolation must prevent direct provider bypass.
+    Production audit sinks and nonce consumers must be durable. Execution
+    fails closed without a configured nonce consumer. This component controls
+    only calls through `execute`; host isolation must prevent provider bypass.
     """
 
     def __init__(
@@ -302,8 +303,10 @@ class MemoryGate:
             )
             if not valid:
                 return False
-            if not consume_nonce or self._nonce_consumer is None:
+            if not consume_nonce:
                 return True
+            if self._nonce_consumer is None:
+                return False
             return self._nonce_consumer(
                 payload["nonce"], float(payload["expires_at"])
             ) is True
