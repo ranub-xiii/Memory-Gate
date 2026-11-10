@@ -532,7 +532,7 @@ class NotionMemoryProvider:
             parts.append(f"## {page_name} (mandatory context)")
             parts.append(body)
 
-        content = "\\n\\n".join(parts)
+        content = "\n\n".join(parts)
         if len(content.encode("utf-8")) > self.max_context_bytes:
             raise NotionAPIError(
                 None, "context_limit",

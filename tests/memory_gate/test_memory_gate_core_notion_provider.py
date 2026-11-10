@@ -250,6 +250,7 @@ class NotionMemoryProviderTests(unittest.TestCase):
         self.assertIn("VERIFIED", snapshot.content)
         self.assertIn("About context", snapshot.content)
         self.assertIn("Mandatory operating rules", snapshot.content)
+        self.assertIn("\n\n", snapshot.content)
         self.assertIn("memory-page", snapshot.source_ids)
         self.assertIn("archive-page", snapshot.source_ids)
         self.assertEqual(len(snapshot.version), 64)
