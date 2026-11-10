@@ -58,6 +58,35 @@ class MemoryRetrievalTests(unittest.TestCase):
         )
         self.assertEqual([item["title"] for item in ranked], ["Current decision"])
 
+    def test_relation_endpoints_are_scoped_to_memory_archive_records(self):
+        archive_new = self.record("New policy", Status="VERIFIED")
+        project_old = {
+            **self.record("Old project policy", Status="VERIFIED"),
+            "id": "project-old-policy",
+            "source_name": "Memory Projects",
+        }
+        relation = {
+            "properties": {
+                "From Memory": "New policy",
+                "To Memory": "Old project policy",
+                "Relation Type": "SUPERSEDES",
+                "Status": "ACTIVE",
+            }
+        }
+        ranked = rank_memory_records(
+            [archive_new, project_old], None, now=self.NOW,
+            relations=[relation], limit=5,
+        )
+        ranked_by_id = {item["id"]: item for item in ranked}
+        self.assertIn(archive_new["id"], ranked_by_id)
+        self.assertIn(project_old["id"], ranked_by_id)
+        self.assertTrue(any(
+            warning.startswith(
+                "unresolved_relation_endpoint:SUPERSEDES:"
+            )
+            for warning in ranked_by_id[archive_new["id"]]["retrieval_warnings"]
+        ))
+
     def test_explicit_supersedes_relation_suppresses_target(self):
         old = self.record("Old policy", Status="VERIFIED")
         new = self.record("New policy", Status="VERIFIED")
