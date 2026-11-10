@@ -503,7 +503,7 @@ class NotionMemoryProvider:
             props = record["properties"]
             parts.append(
                 f"### {record['title']} "
-                f"[source={record['source_name']}; status={record['evidence_status']}; "
+                f"[source={record['source_name']}; status={record['record_status']}; "
                 f"retrieval_score={record['retrieval_score']}]"
             )
             for key, value in props.items():

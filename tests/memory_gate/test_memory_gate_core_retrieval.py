@@ -47,6 +47,7 @@ class MemoryRetrievalTests(unittest.TestCase):
             self.record("Old decision", Status="SUPERSEDED"),
             self.record("Closed task", Status="CLOSED"),
             self.record("Killed hypothesis", Status="KILL"),
+            self.record("Killed type", Type="KILL"),
             self.record(
                 "Future record", Status="VERIFIED",
                 **{"Created At": "2030-01-01T00:00:00Z"},
@@ -122,7 +123,7 @@ class MemoryRetrievalTests(unittest.TestCase):
         ]
         ranked = rank_memory_records(records, None, now=self.NOW)
         self.assertEqual(
-            {item["evidence_status"] for item in ranked},
+            {item["record_status"] for item in ranked},
             {"CONTRADICTED", "UNKNOWN"},
         )
         self.assertTrue(all(item["retrieval_warnings"] for item in ranked))
@@ -146,6 +147,27 @@ class MemoryRetrievalTests(unittest.TestCase):
             records, "quantum chromodynamics", now=self.NOW,
         )
         self.assertEqual(ranked, [])
+
+    def test_historical_query_still_rejects_future_dated_records(self):
+        records = [
+            self.record("Old policy", Status="SUPERSEDED"),
+            self.record(
+                "Future policy", Status="VERIFIED",
+                **{"Created At": "2030-01-01T00:00:00Z"},
+            ),
+        ]
+        ranked = rank_memory_records(
+            records, "historical policy", now=self.NOW, limit=5,
+        )
+        self.assertEqual([item["title"] for item in ranked], ["Old policy"])
+
+    def test_assumption_and_hypothesis_types_are_labelled(self):
+        records = [
+            self.record("Assumed model", Type="ASSUMPTION"),
+            self.record("Possible model", Type="HYPOTHESIS"),
+        ]
+        ranked = rank_memory_records(records, None, now=self.NOW)
+        self.assertTrue(all(item["retrieval_warnings"] for item in ranked))
 
     def test_historical_query_can_retrieve_superseded_record(self):
         records = [

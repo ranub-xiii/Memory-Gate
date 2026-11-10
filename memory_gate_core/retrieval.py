@@ -119,17 +119,18 @@ def rank_memory_records(
         props = record.get("properties")
         props = props if isinstance(props, Mapping) else {}
         status = str(props.get("Status", "")).upper()
+        record_type = str(props.get("Type", "")).upper()
         title = str(record.get("title", ""))
         superseded_by = props.get("Superseded By")
         keys = _record_keys(record)
         if not historical and (
-            status in _INACTIVE or bool(superseded_by)
-            or bool(keys & relation_superseded)
+            status in _INACTIVE or record_type in {"KILL", "CLOSED"}
+            or bool(superseded_by) or bool(keys & relation_superseded)
         ):
             continue
         created = _timestamp(props.get("Created At"))
         updated = _timestamp(props.get("Updated At"))
-        if not historical and any(
+        if any(
             stamp is not None and stamp > float(now) + 300
             for stamp in (created, updated)
         ):
@@ -191,13 +192,19 @@ def rank_memory_records(
             score += max(0.0, 0.35 * (1.0 - age_days / 365.0))
         if item["status"] in {"VERIFIED", "EXACT", "PASS", "SUPPORTED"}:
             score += 0.15
-        if item["status"] in {"CONTRADICTED", "UNKNOWN", "PENDING"}:
+        source_name = str(item["record"].get("source_name", ""))
+        if source_name == "Memory Archive" and item["status"] in {
+            "CONTRADICTED", "UNKNOWN", "PENDING", "UNVERIFIED"
+        }:
             item["warnings"].append(f"evidence_status:{item['status']}")
+        record_type = str(item["props"].get("Type", "")).upper()
+        if record_type in {"ASSUMPTION", "HYPOTHESIS", "UNKNOWN", "OPEN_QUESTION"}:
+            item["warnings"].append(f"record_type:{record_type}")
         ranked.append({
             **item["record"],
             "retrieval_score": round(score, 6),
             "retrieval_warnings": list(dict.fromkeys(item["warnings"])),
-            "evidence_status": item["status"] or "UNSPECIFIED",
+            "record_status": item["status"] or "UNSPECIFIED",
         })
 
     if not query_terms:
