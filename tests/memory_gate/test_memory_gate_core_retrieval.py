@@ -162,6 +162,23 @@ class MemoryRetrievalTests(unittest.TestCase):
         self.assertNotIn("Refuted model", [item["title"] for item in normal])
         self.assertIn("Refuted model", [item["title"] for item in historical])
 
+    def test_croatian_historical_intent_retrieves_refuted_records(self):
+        records = [
+            self.record("Refuted model", Status="REFUTED"),
+            self.record("Current model", Status="VERIFIED"),
+        ]
+        for historical_term in (
+            "povijest", "prethodno", "opovrgnuto", "arhiva",
+        ):
+            with self.subTest(historical_term=historical_term):
+                ranked = rank_memory_records(
+                    records, f"zašto je {historical_term} model",
+                    now=self.NOW, limit=5,
+                )
+                self.assertIn(
+                    "Refuted model", [item["title"] for item in ranked]
+                )
+
     def test_historical_query_still_rejects_future_dated_records(self):
         records = [
             self.record("Old policy", Status="SUPERSEDED"),

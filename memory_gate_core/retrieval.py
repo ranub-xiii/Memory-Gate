@@ -20,13 +20,45 @@ _STOP = frozenset({
     "their", "them", "there", "this", "to", "up", "use", "was", "we",
     "what", "when", "where", "which", "who", "why", "will", "with",
     "would", "you", "your",
+    "da", "i", "ili", "ali", "ako", "dok", "kako", "gdje", "gde",
+    "kada", "zašto", "zasto", "što", "sto", "koji", "koja", "koje",
+    "kojeg", "kojoj", "kojim", "čiji", "ciji", "je", "jesam", "jesi",
+    "jesmo", "jeste", "jesu", "sam", "si", "smo", "ste", "su", "se",
+    "u", "na", "iz", "od", "do", "za", "s", "sa", "bez", "po", "pri",
+    "prema", "kao", "mi", "ti", "ja", "on", "ona", "ono", "oni", "one",
+    "ovo", "ovaj", "ova", "taj", "ta", "te", "to", "bi", "bih", "bismo",
+    "biste", "će", "ce", "može", "mozes", "mogu", "treba", "molim",
 })
 _INACTIVE = frozenset({"SUPERSEDED", "KILL", "CLOSED", "REFUTED"})
 _CONFLICTING = frozenset({"CONTRADICTS", "REFUTES", "KILLS"})
 _HISTORICAL_TERMS = frozenset({
     "history", "historical", "previous", "former", "superseded",
     "closed", "old", "past", "archive", "refuted", "rejected",
-    "killed", "kill", "supersession",
+    "killed", "kill", "supersession", "legacy", "archived", "obsolete",
+    "deprecated", "discarded", "abolished",
+    # Croatian historical intent and common inflections.
+    "povijest", "povijesni", "povijesna", "povijesno",
+    "prethodni", "prethodna", "prethodno", "prethodne", "prethodnih",
+    "prijašnji", "prijašnja", "prijašnje", "prijašnjih",
+    "raniji", "ranija", "ranije", "ranijih",
+    "stari", "stara", "staro", "stariji", "starija", "starije", "starijih",
+    "prošli", "prošla", "prošlo", "prošle", "prošlih",
+    "arhiva", "arhivski", "arhivsko",
+    "opovrgnut", "opovrgnuta", "opovrgnuto", "opovrgnute",
+    "pobijen", "pobijena", "pobijeno", "pobijene",
+    "odbačen", "odbačena", "odbačeno", "odbačene",
+    "odbijen", "odbijena", "odbijeno",
+    "ukinut", "ukinuta", "ukinuto", "ugašen", "ugašena", "ugašeno",
+    "zatvoren", "zatvorena", "zatvoreno",
+    "nadjačan", "nadjačana", "nadjačano",
+    "zamijenjen", "zamijenjena", "zamijenjeno",
+    "poništen", "poništena", "poništeno",
+    # Common unaccented variants.
+    "prijasnji", "prijasnja", "prijasnje", "prosli", "prosla", "proslo",
+    "odbacen", "odbacena", "odbaceno", "ugasen", "ugasena", "ugaseno",
+    "ponisten", "ponistena", "ponisteno",
+    # Closely related Serbian forms.
+    "istorija", "istorijski", "istorijska",
 })
 
 
