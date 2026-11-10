@@ -51,7 +51,9 @@ def _timestamp(value: object) -> float | None:
 
 
 def _norm(value: object) -> str:
-    return " ".join(_tokens(value))
+    if not isinstance(value, str):
+        return ""
+    return " ".join(_TOKEN.findall(value.casefold()))
 
 
 def _record_keys(record: Mapping[str, Any]) -> set[str]:

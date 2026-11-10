@@ -94,6 +94,27 @@ class MemoryRetrievalTests(unittest.TestCase):
             for item in ranked
         ))
 
+    def test_relation_matching_does_not_collapse_distinct_short_suffixes(self):
+        first = self.record("Claim A", Status="VERIFIED")
+        second = self.record("Claim B", Status="SUPPORTED")
+        third = self.record("Claim C", Status="VERIFIED")
+        relation = {
+            "properties": {
+                "From Memory": "Claim A",
+                "To Memory": "Claim B",
+                "Relation Type": "CONTRADICTS",
+                "Status": "ACTIVE",
+            }
+        }
+        ranked = rank_memory_records(
+            [first, second, third], None, now=self.NOW,
+            relations=[relation],
+        )
+        by_title = {item["title"]: item for item in ranked}
+        self.assertTrue(by_title["Claim A"]["retrieval_warnings"])
+        self.assertTrue(by_title["Claim B"]["retrieval_warnings"])
+        self.assertEqual(by_title["Claim C"]["retrieval_warnings"], [])
+
     def test_contradicted_and_unknown_records_are_not_silently_promoted(self):
         records = [
             self.record("Unresolved memory", Status="CONTRADICTED"),
