@@ -11,7 +11,8 @@ from .notion_memory_provider import (
     NotionAPIClient, NotionAPIError, NotionMemoryProvider,
     extract_page_properties,
 )
-from .openai_responses_client import OpenAIAPIError, OpenAIResponsesClient\nfrom .retrieval import rank_memory_records
+from .openai_responses_client import OpenAIAPIError, OpenAIResponsesClient
+from .retrieval import rank_memory_records
 
 __all__ = [
     "DurableAuditLog", "GateDecision", "GateExecution", "GateRequest",
