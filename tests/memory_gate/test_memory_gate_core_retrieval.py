@@ -1,13 +1,41 @@
+import json
 import unittest
 import uuid
 
-from memory_gate_core.retrieval import rank_memory_records
+from memory_gate_core.retrieval import rank_memory_records as _rank_memory_records
+
+TEST_SOURCE_ID = "11111111-1111-4111-8111-111111111111"
+TEST_SOURCE_REGISTRY = [{
+    "id": TEST_SOURCE_ID,
+    "source_name": "Memory Sources",
+    "title": "Synthetic test source",
+    "properties": {
+        "Source": "Synthetic test source",
+        "Source Type": "PRIMARY",
+        "DOI": "10.1234/example",
+        "URL": "https://example.org/source",
+    },
+    "body": "",
+}]
+
+
+def rank_memory_records(records, query, *, now, limit=24, relations=(),
+                        source_registry=None):
+    return _rank_memory_records(
+        records, query, now=now, limit=limit, relations=relations,
+        source_registry=(
+            TEST_SOURCE_REGISTRY if source_registry is None else source_registry
+        ),
+    )
 
 
 class MemoryRetrievalTests(unittest.TestCase):
     NOW = 1_800_000_000.0
 
     def record(self, title, **properties):
+        properties.setdefault("Project", "Test Project")
+        properties.setdefault("Topic", "Test Topic")
+        properties.setdefault("Type", "FACT")
         return {
             "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"memory:{title}")),
             "title": title,
@@ -17,8 +45,41 @@ class MemoryRetrievalTests(unittest.TestCase):
         }
 
     def relation(self, source, target, relation_type, *, status="ACTIVE",
-                 evidence="reviewed evidence reference"):
+                 evidence=None, scope=None):
         key = f"{relation_type}:{source['id']}:{target['id']}:{status}"
+        roles = {
+            "SUPPORTS": ("EVIDENCE", "CLAIM", "RESULT", "FACT"),
+            "REFUTES": ("COUNTER_EVIDENCE", "CLAIM", "OBSERVATION", "FACT"),
+            "CONTRADICTS": ("CLAIM", "CLAIM", "FACT", "FACT"),
+            "SUPERSEDES": ("NEWER_CLAIM", "OLDER_CLAIM", "FACT", "FACT"),
+            "DERIVED_FROM": ("DERIVED_RECORD", "SOURCE_RECORD", "DERIVATION", "SOURCE"),
+        }
+        role = roles.get(relation_type)
+        if role is not None:
+            if source["properties"].get("Type") == "FACT" and role[2] != "FACT":
+                source["properties"]["Type"] = role[2]
+            if target["properties"].get("Type") == "FACT" and role[3] != "FACT":
+                target["properties"]["Type"] = role[3]
+        if evidence is None and role is not None:
+            topic = (
+                source["properties"].get("Topic", "")
+                if relation_type == "DERIVED_FROM"
+                else target["properties"].get("Topic", "")
+            )
+            evidence = json.dumps({
+                "schema": "memory-gate/evidence/v1",
+                "relation": relation_type,
+                "from_role": role[0],
+                "to_role": role[1],
+                "scope": scope or {
+                    "project": source["properties"].get("Project", ""),
+                    "topic": topic,
+                    "statement": f"Scoped {relation_type} assertion for {target['title']}",
+                },
+                "sources": [TEST_SOURCE_ID],
+            }, separators=(",", ":"))
+        elif evidence is None:
+            evidence = "Unclassified relation test fixture"
         return {
             "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"relation:{key}")),
             "properties": {
@@ -601,6 +662,88 @@ class MemoryRetrievalTests(unittest.TestCase):
             records, "historical old policy", now=self.NOW, limit=5,
         )
         self.assertIn("Old policy", [item["title"] for item in ranked])
+
+
+    def test_legacy_free_text_evidence_is_blocked(self):
+        old = self.record("Legacy old policy")
+        new = self.record("Legacy new policy")
+        relation = self.relation(new, old, "SUPERSEDES", evidence="Observed in a prior session")
+        ranked = rank_memory_records([old, new], None, now=self.NOW, relations=[relation])
+        self.assertEqual({item["id"] for item in ranked}, {old["id"], new["id"]})
+        self.assertTrue(all(any(
+            "blocked_relation_evidence_contract:" in warning
+            and "invalid_evidence_json" in warning
+            for warning in item["retrieval_warnings"]
+        ) for item in ranked))
+
+    def test_unknown_evidence_version_is_blocked(self):
+        old = self.record("Version old claim")
+        new = self.record("Version new claim")
+        relation = self.relation(new, old, "SUPERSEDES")
+        payload = json.loads(relation["properties"]["Evidence"])
+        payload["schema"] = "memory-gate/evidence/v99"
+        relation["properties"]["Evidence"] = json.dumps(payload)
+        ranked = rank_memory_records([old, new], None, now=self.NOW, relations=[relation])
+        self.assertEqual({item["id"] for item in ranked}, {old["id"], new["id"]})
+        self.assertTrue(all(any(
+            "unsupported_evidence_schema" in warning
+            for warning in item["retrieval_warnings"]
+        ) for item in ranked))
+
+    def test_evidence_source_must_resolve_in_registry(self):
+        old = self.record("Unregistered old claim")
+        new = self.record("Unregistered new claim")
+        relation = self.relation(new, old, "SUPERSEDES")
+        ranked = _rank_memory_records(
+            [old, new], None, now=self.NOW, relations=[relation],
+            source_registry=[],
+        )
+        self.assertEqual({item["id"] for item in ranked}, {old["id"], new["id"]})
+        self.assertTrue(all(any(
+            "evidence_source_missing" in warning
+            for warning in item["retrieval_warnings"]
+        ) for item in ranked))
+
+    def test_endpoint_semantic_role_is_enforced(self):
+        old = self.record("Role old claim")
+        new = self.record("Role new claim")
+        relation = self.relation(new, old, "SUPERSEDES")
+        new["properties"]["Type"] = "SOURCE"
+        ranked = rank_memory_records([old, new], None, now=self.NOW, relations=[relation])
+        self.assertEqual({item["id"] for item in ranked}, {old["id"], new["id"]})
+        self.assertTrue(all(any(
+            "endpoint_type_role_mismatch" in warning
+            for warning in item["retrieval_warnings"]
+        ) for item in ranked))
+
+    def test_relation_scope_must_match_project(self):
+        old = self.record("Scope old claim")
+        new = self.record("Scope new claim")
+        new["properties"]["Project"] = "Other Project"
+        relation = self.relation(new, old, "SUPERSEDES")
+        ranked = rank_memory_records([old, new], None, now=self.NOW, relations=[relation])
+        self.assertTrue(all(any(
+            "relation_project_scope_mismatch" in warning
+            for warning in item["retrieval_warnings"]
+        ) for item in ranked))
+
+    def test_contradiction_requires_identical_claim_topic(self):
+        first = self.record("Claim in topic A", Topic="Topic A")
+        second = self.record("Claim in topic B", Topic="Topic B")
+        relation = self.relation(first, second, "CONTRADICTS")
+        ranked = rank_memory_records([first, second], None, now=self.NOW, relations=[relation])
+        self.assertTrue(all(any(
+            "relation_topic_scope_mismatch" in warning
+            for warning in item["retrieval_warnings"]
+        ) for item in ranked))
+
+    def test_relation_evidence_source_ids_are_returned(self):
+        old = self.record("Provenance old claim")
+        new = self.record("Provenance new claim")
+        relation = self.relation(new, old, "SUPERSEDES")
+        ranked = rank_memory_records([old, new], None, now=self.NOW, relations=[relation])
+        current = next(item for item in ranked if item["id"] == new["id"])
+        self.assertEqual(current["relation_evidence_source_ids"], [TEST_SOURCE_ID])
 
 
 if __name__ == "__main__":

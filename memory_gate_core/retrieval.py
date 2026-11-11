@@ -11,6 +11,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
+from .evidence_contract import EvidenceContractError, validate_evidence_contract
+
 _TOKEN = re.compile(r"[^\W_]+", re.UNICODE)
 _STOP = frozenset({
     "a", "about", "after", "all", "also", "an", "and", "any", "are",
@@ -188,9 +190,11 @@ def _cyclic_components(
 def _relation_warnings(
     records: Sequence[Mapping[str, Any]],
     relations: Sequence[Mapping[str, Any]],
-) -> tuple[dict[int, list[str]], set[int]]:
+    source_registry: Sequence[Mapping[str, Any]],
+) -> tuple[dict[int, list[str]], set[int], dict[int, set[str]]]:
     warnings: dict[int, list[str]] = {}
     superseded: set[int] = set()
+    evidence_sources: dict[int, set[str]] = {}
     # Memory Graph nodes are Memory Archive pages only. Architecture nodes
     # cannot be resolved by this Memory-only resolver.
     indexed: dict[str, list[Mapping[str, Any]]] = {}
@@ -295,18 +299,29 @@ def _relation_warnings(
                 )
             continue
 
-        # Evidence is provenance metadata, not proof of truth.
+        # Free text is not a validated evidence chain. Only Evidence v1 with
+        # exact Memory Sources UUID references and compatible endpoint roles
+        # can authorize a Memory Graph edge to affect retrieval.
         if relation_id is None:
             for record in (source_record, target_record):
                 add_warning(record, f"blocked_relation_provenance:{edge}")
             continue
-        evidence = props.get("Evidence")
-        if not isinstance(evidence, str) or not evidence.strip():
+        try:
+            source_refs = validate_evidence_contract(
+                props.get("Evidence"), relation_type, source_record,
+                target_record, source_registry,
+            )
+        except EvidenceContractError as error:
+            warning = (
+                f"blocked_relation_missing_evidence:{edge}"
+                if error.code == "missing_evidence"
+                else f"blocked_relation_evidence_contract:{edge}:{error.code}"
+            )
             for record in (source_record, target_record):
-                add_warning(
-                    record, f"blocked_relation_missing_evidence:{edge}"
-                )
+                add_warning(record, warning)
             continue
+        for record in (source_record, target_record):
+            evidence_sources.setdefault(id(record), set()).update(source_refs)
 
         if relation_type in {"SUPERSEDES", "DERIVED_FROM"}:
             dag_edges[relation_type].append((
@@ -369,7 +384,7 @@ def _relation_warnings(
         add_warning(source_record, f"derived_from_relation:{edge}")
         add_warning(target_record, f"source_of_derivation_relation:{edge}")
 
-    return warnings, superseded
+    return warnings, superseded, evidence_sources
 
 def rank_memory_records(
     records: Sequence[Mapping[str, Any]],
@@ -378,6 +393,7 @@ def rank_memory_records(
     now: float,
     limit: int = 24,
     relations: Sequence[Mapping[str, Any]] = (),
+    source_registry: Sequence[Mapping[str, Any]] = (),
 ) -> list[dict[str, Any]]:
     """Rank memory records; suppress inactive/future/superseded facts fail-closed.
 
@@ -391,7 +407,9 @@ def rank_memory_records(
     query_terms = list(dict.fromkeys(_tokens(query or "")))
     query_set = set(query_terms)
     historical = bool(query_set & _HISTORICAL_TERMS)
-    relation_warnings, relation_superseded = _relation_warnings(records, relations)
+    relation_warnings, relation_superseded, relation_evidence_sources = (
+        _relation_warnings(records, relations, source_registry)
+    )
 
     prepared: list[dict[str, Any]] = []
     document_frequency: dict[str, int] = {}
@@ -495,6 +513,9 @@ def rank_memory_records(
             **item["record"],
             "retrieval_score": round(score, 6),
             "retrieval_warnings": list(dict.fromkeys(item["warnings"])),
+            "relation_evidence_source_ids": sorted(
+                relation_evidence_sources.get(id(item["record"]), set())
+            ),
             "record_status": item["status"] or "UNSPECIFIED",
         })
 

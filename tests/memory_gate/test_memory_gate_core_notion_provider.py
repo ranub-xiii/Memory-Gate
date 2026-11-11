@@ -254,6 +254,7 @@ class NotionAPIClientTests(unittest.TestCase):
             "To Memory": {"type": "relation", "relation": []},
             "Email": {"type": "email", "email": "private@example.invalid"},
             "Phone": {"type": "phone_number", "phone_number": "+10000000000"},
+            "URL": {"type": "url", "url": "https://example.org/source"},
         }})
         self.assertEqual(result["Title"], "A title")
         self.assertEqual(result["Status"], "VERIFIED")
@@ -266,6 +267,7 @@ class NotionAPIClientTests(unittest.TestCase):
         self.assertEqual(result["To Memory"], [])
         self.assertNotIn("Email", result)
         self.assertNotIn("Phone", result)
+        self.assertEqual(result["URL"], "https://example.org/source")
 
 
 class NotionMemoryProviderTests(unittest.TestCase):
@@ -378,6 +380,91 @@ class NotionMemoryProviderTests(unittest.TestCase):
             with self.assertRaises(NotionAPIError) as raised:
                 NotionMemoryProvider.from_env()
         self.assertEqual(raised.exception.code, "configuration_missing")
+
+
+    def test_existing_source_registry_is_separate_and_referenced_sources_enter_snapshot(self):
+        import uuid
+
+        evidence_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "provider:evidence"))
+        claim_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "provider:claim"))
+        relation_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "provider:relation"))
+        source_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "provider:registered-source"))
+        evidence_page = page(evidence_id, {
+            "Content": {"type": "title", "title": [{"plain_text": "Evidence result"}]},
+            "Type": {"type": "select", "select": {"name": "RESULT"}},
+            "Status": {"type": "select", "select": {"name": "VERIFIED"}},
+            "Project": {"type": "rich_text", "rich_text": [{"plain_text": "Provider test"}]},
+            "Topic": {"type": "rich_text", "rich_text": [{"plain_text": "Target claim"}]},
+        })
+        claim_page = page(claim_id, {
+            "Content": {"type": "title", "title": [{"plain_text": "Target claim"}]},
+            "Type": {"type": "select", "select": {"name": "FACT"}},
+            "Status": {"type": "select", "select": {"name": "VERIFIED"}},
+            "Project": {"type": "rich_text", "rich_text": [{"plain_text": "Provider test"}]},
+            "Topic": {"type": "rich_text", "rich_text": [{"plain_text": "Target claim"}]},
+        })
+        evidence_payload = {
+            "schema": "memory-gate/evidence/v1",
+            "relation": "SUPPORTS",
+            "from_role": "EVIDENCE",
+            "to_role": "CLAIM",
+            "scope": {
+                "project": "Provider test",
+                "topic": "Target claim",
+                "statement": "The result supports the explicitly scoped claim.",
+            },
+            "sources": [source_id],
+        }
+        relation_page = page(relation_id, {
+            "Relation": {"type": "title", "title": [{"plain_text": "Evidence result → target claim"}]},
+            "From Memory": {"type": "rich_text", "rich_text": [{"plain_text": f"mem:{evidence_id}"}]},
+            "To Memory": {"type": "rich_text", "rich_text": [{"plain_text": f"mem:{claim_id}"}]},
+            "Relation Type": {"type": "select", "select": {"name": "SUPPORTS"}},
+            "Status": {"type": "select", "select": {"name": "ACTIVE"}},
+            "Evidence": {"type": "rich_text", "rich_text": [{"plain_text": json.dumps(evidence_payload)}]},
+        })
+        source_page = page(source_id, {
+            "Source": {"type": "title", "title": [{"plain_text": "Primary test source"}]},
+            "Source Type": {"type": "select", "select": {"name": "PRIMARY"}},
+            "DOI": {"type": "rich_text", "rich_text": [{"plain_text": "10.1234/provider-test"}]},
+            "URL": {"type": "url", "url": "https://example.org/provider-test"},
+            "Version": {"type": "rich_text", "rich_text": [{"plain_text": "1"}]},
+        })
+        about_page_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "provider:about"))
+        rules_page_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "provider:rules"))
+        responses = [
+            FakeResponse({"results": [evidence_page, claim_page], "has_more": False}),
+            FakeResponse({"results": [relation_page], "has_more": False}),
+            FakeResponse({"results": [source_page], "has_more": False}),
+            FakeResponse({"results": [paragraph("Archive body one")], "has_more": False}),
+            FakeResponse({"results": [paragraph("Archive body two")], "has_more": False}),
+            FakeResponse({"object": "page", "id": about_page_id, "last_edited_time": "2026-11-01T00:00:00Z"}),
+            FakeResponse({"results": [paragraph("About context")], "has_more": False}),
+            FakeResponse({"object": "page", "id": rules_page_id, "last_edited_time": "2026-11-01T00:00:00Z"}),
+            FakeResponse({"results": [paragraph("Operating rules")], "has_more": False}),
+        ]
+        opener = FakeOpener(responses)
+        client = NotionAPIClient(
+            "token", opener=opener, sleeper=lambda delay: None, min_interval=0,
+        )
+        provider = NotionMemoryProvider(
+            client, allowed_subject_id="subject-1",
+            data_sources={
+                "Memory Archive": "archive-ds",
+                "Memory Relations": "relations-ds",
+                "Memory Sources": "sources-ds",
+            },
+            pages={"About": about_page_id, "Operating Rules": rules_page_id},
+            clock=lambda: 1_800_000_000.0,
+        )
+        snapshot = provider.retrieve("subject-1", query="target claim")
+        self.assertIn("Primary test source", snapshot.content)
+        self.assertIn("https://example.org/provider-test", snapshot.content)
+        self.assertIn(source_id, snapshot.source_ids)
+        self.assertIn(evidence_id, snapshot.source_ids)
+        self.assertIn(claim_id, snapshot.source_ids)
+        self.assertEqual(len(snapshot.version), 64)
+        self.assertEqual(len(opener.requests), 9)
 
 
 if __name__ == "__main__":

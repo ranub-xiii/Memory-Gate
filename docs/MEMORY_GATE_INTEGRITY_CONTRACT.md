@@ -1,6 +1,6 @@
-# Memory Gate Integrity Contract v0.1
+# Memory Gate Integrity Contract v0.2
 
-Status: conservative read-path contract; no Notion schema migration.
+Status: conservative read-path contract with strict Evidence v1; no Notion schema migration.
 Scope: Memory Graph only. No new service, database, or third graph.
 
 ## 1. Distinct states and absence
@@ -24,7 +24,7 @@ The current Notion From Memory and To Memory properties are still text fields. T
 
 An edge affects ordinary retrieval only when both endpoints are either explicit mem: UUID strings or single-ID native Notion relation arrays, and each resolves uniquely to a Memory Archive page; the relation type is supported; status is exactly ACTIVE; the relation row has a valid Notion UUID; Evidence is non-empty; and direction/type invariants hold.
 
-Missing or invalid endpoints, ambiguous IDs, missing evidence text, missing relation identity, or invalid status block activation. A warning is attached where an endpoint record can be identified. `Evidence` is unstructured free text in v0.1; runtime checks only that it is non-empty. It does not verify that the value resolves to a source page, URL, artifact, or observed event. Treat it as a curator-supplied provenance note, not a validated evidence chain and not proof that the claim is true.
+Missing or invalid endpoints, ambiguous IDs, missing evidence, missing relation identity, or invalid status block activation. A warning is attached where an endpoint record can be identified. Evidence was free text in v0.1; in v0.2 the runtime requires the strict Evidence v1 object described in Section 9. Its source references must resolve against the existing Memory Sources registry. This validates identity and contract shape, not source quality, truth, or entailment.
 
 ## 4. Memory Graph relation semantics
 
@@ -38,7 +38,7 @@ Missing or invalid endpoints, ambiguous IDs, missing evidence text, missing rela
 
 For CONTRADICTS, ACTIVE is a curator assertion that the claims share the relevant scope and are incompatible. The current schema has no structured scope or validity fields. Runtime does not infer contradiction from text, similarity, dates, or negation. Candidates remain UNRESOLVED until that review occurs.
 
-Direction convention: `From Memory` is the source and `To Memory` is the target. Runtime applies the fixed direction defined for each supported relation, but it does not infer whether the endpoint record's Type semantically fits the source or target role. Endpoint role, shared scope and valid-time compatibility remain curation decisions; the current schema has no structured fields for those checks.
+Direction convention: `From Memory` is the source and `To Memory` is the target. Evidence v1 declares the required semantic roles; runtime checks those roles against endpoint Type allowlists and validates project/topic scope. Runtime does not infer claims from text or prove that a registered source entails a claim. Valid-time intervals remain unavailable in the current schema.
 
 PART_OF, DEPENDS_ON, USES, and component-level TESTS are not interpreted as Memory Graph relations in v0.1; they belong in the separate Architecture Graph.
 
@@ -84,3 +84,41 @@ No existing Notion relation rows are migrated, renamed, deleted, or reclassified
 - a cycle does not disable an unrelated acyclic supersession;
 - arch: endpoints do not resolve in Memory Graph;
 - absence of an edge does not create a negative relation.
+
+## 9. Versioned Evidence contract — v1
+
+Evidence is a strict JSON object, not an arbitrary explanatory note. The contract identifier is memory-gate/evidence/v1. A relation may affect ordinary Memory Graph retrieval only when the object has exactly these fields:
+
+~~~json
+{
+  "schema": "memory-gate/evidence/v1",
+  "relation": "SUPPORTS",
+  "from_role": "EVIDENCE",
+  "to_role": "CLAIM",
+  "scope": {
+    "project": "Project name",
+    "topic": "Exact target topic",
+    "statement": "The specific statement this edge asserts."
+  },
+  "sources": ["<Memory Sources Notion page UUID>"]
+}
+~~~
+
+- sources contains 1–8 exact Notion page UUIDs from the existing Memory Sources data source. Titles, DOI strings, URLs, and display labels are never identity keys.
+- Each referenced registry page must have a non-empty Source title, a recognized Source Type, and a valid DOI or HTTP/HTTPS URL. USER_PROVIDED and CALCULATION records may instead use non-empty Notes as their locator/provenance description.
+- Unknown/missing fields, duplicate JSON keys, duplicate source IDs, unknown schema versions, malformed UUIDs, free text, and unresolvable or ambiguous references fail closed.
+- Role pairs are fixed: SUPPORTS=EVIDENCE→CLAIM, REFUTES=COUNTER_EVIDENCE→CLAIM, CONTRADICTS=CLAIM↔CLAIM, SUPERSEDES=NEWER_CLAIM→OLDER_CLAIM, DERIVED_FROM=DERIVED_RECORD→SOURCE_RECORD. Endpoint Type values must belong to the reviewed allowlist for that role.
+- Project in Evidence scope must equal both endpoint projects. SUPPORTS/REFUTES scope topic equals the target claim topic. CONTRADICTS/SUPERSEDES require both endpoint topics to match the scope topic. DERIVED_FROM scope names the derived record's topic.
+- The statement is a curator-authored scoped assertion. Runtime validates structure and identity, not entailment, evidence quality, or claim truth.
+- Memory Sources remains the only source registry. No second registry, plugin, database, or Notion schema change is introduced.
+
+### Legacy Evidence migration boundary
+
+The existing nine Notion relation rows still contain free-text Evidence. They do not conform to v1 and therefore cannot activate Memory Graph effects. They are not silently converted, guessed, rewritten, or reclassified. The Memory Sources query returned zero rows on 2026-11-12, so no live relation can currently satisfy a v1 source reference. Reconcile and populate the existing registry through its established workflow before curating v1 edges. This implementation creates no source records and changes no Notion rows.
+
+### Acceptance tests
+
+- URL property extraction and separate registry retrieval.
+- Only referenced, validated Memory Sources pages are bound into a selected snapshot.
+- Legacy free text, unknown versions, duplicate keys/IDs, missing or ambiguous sources, invalid endpoint roles/types, and project/topic mismatches have no ordinary relation effect.
+- Existing DAG cycle and graph-separation protections remain in force.

@@ -14,8 +14,8 @@
 ## Package layout
 
 - `memory_gate_core/memory_gate.py`: admission checks, request/snapshot structures, signed token, controlled execution.
-- `memory_gate_core/notion_memory_provider.py`: read-only Notion adapter with bounded 429/5xx/network retries, metadata-first retrieval with a recency fallback for body-only matches, ranked bounded snapshot construction.
-- `memory_gate_core/retrieval.py`: deterministic lexical ranking, English/Croatian historical-intent recognition and stop words, source-aware status/type labelling, future-record rejection, and identity-safe relation handling. Relation endpoints accept explicit mem:<Notion page UUID> text or a single-ID native Notion relation array, and resolve only against Memory Archive. Empty/multi-ID arrays are blocked. SUPERSEDES and DERIVED_FROM cycles are detected without suppressing participants.
+- `memory_gate_core/notion_memory_provider.py`: read-only Notion adapter with bounded 429/5xx/network retries, metadata-first retrieval with a recency fallback for body-only matches, ranked bounded snapshot construction, and separate extraction of the existing Memory Sources registry (including URL properties).
+- `memory_gate_core/retrieval.py`: deterministic lexical ranking, English/Croatian historical-intent recognition and stop words, source-aware status/type labelling, future-record rejection, and identity-safe relation handling. Memory Graph relations require Evidence v1, exact Memory Sources UUID references, compatible endpoint roles/types, and matching project/topic scope. Legacy free-text Evidence fails closed. Relation endpoints accept explicit mem:<Notion page UUID> text or a single-ID native Notion relation array, and resolve only against Memory Archive. Empty/multi-ID arrays are blocked. SUPERSEDES and DERIVED_FROM cycles are detected without suppressing participants.
 - `memory_gate_core/openai_responses_client.py`: constrained Responses API adapter.
 - `memory_gate_core/memory_gate_service.py`: orchestration, authentication, idempotency, and result classification.
 - `memory_gate_core/idempotency.py`: persistent SQLite request claims and terminal state.
@@ -53,3 +53,8 @@ See docs/MEMORY_GATE_INTEGRITY_CONTRACT.md for endpoint identity, edge states, p
 The repository root installs both AuthorityLab and Memory Gate Core. Run `python -m unittest discover -s tests/memory_gate -v` and `pytest -q` after installing the project test extra.
 
 This is an experimental reference implementation, not a production-certified memory platform. `store=false` is not a Zero Data Retention guarantee, and live provider behavior has not been verified by mocked unit tests.
+
+
+## Evidence contract v1
+
+Memory Sources remains the sole source registry. The provider preserves its URL property, extracts the registry separately from retrievable memory records, and binds only exact registered source UUIDs accepted by the versioned Evidence validator. Legacy free-text Evidence remains blocked and unchanged; no Notion rows or schema are migrated.
