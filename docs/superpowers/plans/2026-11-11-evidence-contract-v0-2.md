@@ -111,6 +111,7 @@ Expected: PASS.
   - `test_parse_rejects_unknown_or_missing_keys`
   - `test_parse_rejects_unknown_schema_version`
   - `test_parse_rejects_invalid_uuid_timestamp_digest_and_locator`
+  - `test_parse_requires_scope_endpoint_ids_and_conditional_validity_shape`
   - `test_parse_rejects_oversized_evidence_payload_and_locator`
 
 - [ ] **Step 2: Run parser tests and confirm RED**
@@ -173,7 +174,7 @@ Expected: PASS.
   - `test_supersedes_requires_newer_to_older_and_ordered_validity`
   - `test_derived_from_requires_derived_to_source_roles`
   - `test_relation_endpoint_ids_must_match_evidence`
-  - `test_scope_mismatch_is_rejected`
+  - `test_scope_endpoint_ids_must_match_exact_relation_endpoints`
   - `test_architecture_relation_types_are_not_memory_graph_types`
 
 - [ ] **Step 2: Run focused tests and confirm RED**
