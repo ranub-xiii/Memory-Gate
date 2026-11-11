@@ -1,18 +1,18 @@
 """Evidence-aware workflow orchestration primitives."""
 
-from .audit_log import DurableAuditLog
-from .authorization import AuthorizationDecision, AuthorizationRequest, Authorizer, ExactMatchAuthorizer
-from .core import WorkflowCore
-from .execution import DockerSandboxRunner, ExecutionBlockedError, InProcessRunner, SubprocessHandlerRunner
-from .governance import EvidenceSchema, GovernancePolicy
-from .memory_gate import GateDecision, GateExecution, GateRequest, InvocationOutcomeUnknown, MemoryGate, MemorySnapshot
-from .notion_memory_provider import NotionAPIClient, NotionAPIError, NotionMemoryProvider, extract_page_properties
-from .openai_responses_client import OpenAIAPIError, OpenAIResponsesClient
-from .idempotency import IdempotencyConflict, IdempotencyError, SQLiteIdempotencyStore
-from .memory_gate_service import MemoryGateService
-from .models import CheckResult, CheckStatus, Task, ToolResult, WorkflowReport, WorkflowStatus
-from .loop_guardrails import ExecutionClaimAudit, GuardrailFinding, LoopDetector, ToolObservation, audit_execution_claim
-from .semantic_validation import SemanticValidationResult, SemanticValidatorRegistry
+from authoritylab.audit_log import DurableAuditLog
+from authoritylab.authorization import AuthorizationDecision, AuthorizationRequest, Authorizer, ExactMatchAuthorizer
+from authoritylab.core import WorkflowCore
+from authoritylab.execution import DockerSandboxRunner, ExecutionBlockedError, InProcessRunner, SubprocessHandlerRunner
+from authoritylab.governance import EvidenceSchema, GovernancePolicy
+from authoritylab.memory_gate import GateDecision, GateExecution, GateRequest, InvocationOutcomeUnknown, MemoryGate, MemorySnapshot
+from authoritylab.notion_memory_provider import NotionAPIClient, NotionAPIError, NotionMemoryProvider, extract_page_properties
+from authoritylab.openai_responses_client import OpenAIAPIError, OpenAIResponsesClient
+from authoritylab.idempotency import IdempotencyConflict, IdempotencyError, SQLiteIdempotencyStore
+from authoritylab.memory_gate_service import MemoryGateService
+from authoritylab.models import CheckResult, CheckStatus, Task, ToolResult, WorkflowReport, WorkflowStatus
+from authoritylab.loop_guardrails import ExecutionClaimAudit, GuardrailFinding, LoopDetector, ToolObservation, audit_execution_claim
+from authoritylab.semantic_validation import SemanticValidationResult, SemanticValidatorRegistry
 
 __all__ = [
     "AuthorizationDecision",

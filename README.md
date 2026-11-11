@@ -112,3 +112,10 @@ This is a best-effort minimization layer, **not a guarantee that all secrets or 
 - The project is not a security certification or production-readiness claim.
 
 For new gates, add positive, negative, missing-evidence, and boundary tests. Keep network, filesystem, and external-service actions behind explicit adapters. Before production deployment, complete the [security and recovery runbook](docs/production-security-runbook.md); CI success alone is not a production security certification.
+
+
+## Memory Gate package
+
+This repository also contains the independently importable `memory_gate_core` package: a single-user reference service for scoped memory retrieval, provenance validation, pre-inference admission, controlled model invocation, idempotency, and audit logging. It is additive to the existing AuthorityLab workflow-engine modules; existing root modules, tests, and CI workflows are retained.
+
+See [Memory Gate architecture and limitations](docs/MEMORY_GATE.md) and [extraction provenance](docs/MEMORY_GATE_EXTRACTION_MANIFEST.md). The package is experimental and is not production-certified; see its documented replay, retrieval, provider, and deployment limitations before use.

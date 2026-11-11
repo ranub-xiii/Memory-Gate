@@ -1,0 +1,471 @@
+import io
+import json
+import unittest
+from http.client import HTTPMessage
+from unittest.mock import patch
+from urllib.error import HTTPError, URLError
+
+from memory_gate_core.notion_memory_provider import (
+    NotionAPIClient,
+    NotionAPIError,
+    NotionMemoryProvider,
+    extract_page_properties,
+)
+
+
+class FakeResponse:
+    def __init__(self, payload, status=200):
+        self.status = status
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self):
+        return self._body
+
+
+class FakeOpener:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.requests = []
+
+    def __call__(self, request, timeout):
+        self.requests.append(request)
+        result = self.responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+def paragraph(text):
+    return {
+        "object": "block", "type": "paragraph", "has_children": False,
+        "paragraph": {"rich_text": [{"plain_text": text}]},
+    }
+
+
+def page(page_id, properties, edited="2026-11-01T00:00:00Z"):
+    return {
+        "object": "page", "id": page_id,
+        "last_edited_time": edited, "properties": properties,
+    }
+
+
+class NotionAPIClientTests(unittest.TestCase):
+    def client(self, responses):
+        return NotionAPIClient(
+            "secret-test-token", opener=FakeOpener(responses),
+            sleeper=lambda delay: None, min_interval=0,
+        )
+
+    def test_query_uses_current_data_source_endpoint_and_version(self):
+        opener = FakeOpener([FakeResponse({"results": [], "has_more": False})])
+        client = NotionAPIClient(
+            "secret-test-token", opener=opener, sleeper=lambda delay: None,
+            min_interval=0,
+        )
+        self.assertEqual(client.query_data_source("source-id"), [])
+        request = opener.requests[0]
+        self.assertEqual(
+            request.full_url,
+            "https://api.notion.com/v1/data_sources/source-id/query",
+        )
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(request.get_header("Notion-version"), "2026-03-11")
+        self.assertEqual(
+            request.get_header("Authorization"), "Bearer secret-test-token"
+        )
+
+    def test_query_rejects_non_page_results(self):
+        opener = FakeOpener([
+            FakeResponse({
+                "results": [{"object": "data_source"}], "has_more": False,
+            })
+        ])
+        client = NotionAPIClient(
+            "token", opener=opener, sleeper=lambda delay: None, min_interval=0,
+        )
+        with self.assertRaises(NotionAPIError) as raised:
+            client.query_data_source("ds")
+        self.assertEqual(raised.exception.code, "invalid_page")
+
+    def test_query_paginates_with_cursor(self):
+        opener = FakeOpener([
+            FakeResponse({
+                "results": [{"object": "page", "id": "one"}],
+                "has_more": True, "next_cursor": "next",
+            }),
+            FakeResponse({
+                "results": [{"object": "page", "id": "two"}],
+                "has_more": False,
+            }),
+        ])
+        client = NotionAPIClient(
+            "token", opener=opener, sleeper=lambda delay: None, min_interval=0,
+        )
+        results = client.query_data_source("ds", page_size=1)
+        self.assertEqual([item["id"] for item in results], ["one", "two"])
+        second_body = json.loads(opener.requests[1].data)
+        self.assertEqual(second_body["start_cursor"], "next")
+
+    def test_block_children_recurses_into_nested_blocks(self):
+        nested = {
+            "object": "block", "id": "nested", "type": "toggle",
+            "has_children": True,
+            "toggle": {"rich_text": [{"plain_text": "Parent"}]},
+        }
+        opener = FakeOpener([
+            FakeResponse({
+                "results": [nested, paragraph("Sibling")], "has_more": False,
+            }),
+            FakeResponse({"results": [paragraph("Child")], "has_more": False}),
+        ])
+        client = NotionAPIClient(
+            "token", opener=opener, sleeper=lambda delay: None, min_interval=0,
+        )
+        self.assertEqual(
+            client.block_children_text("page"), "Parent\nChild\nSibling"
+        )
+
+    def test_unauthorized_response_is_sanitized(self):
+        headers = HTTPMessage()
+        body = io.BytesIO(b'{"code":"unauthorized","message":"secret detail"}')
+        error = HTTPError(
+            "https://api.notion.com", 401, "Unauthorized", headers, body
+        )
+        client = self.client([error])
+        with self.assertRaises(NotionAPIError) as raised:
+            client.query_data_source("ds")
+        self.assertEqual(raised.exception.status, 401)
+        self.assertEqual(raised.exception.code, "unauthorized")
+        self.assertNotIn("secret detail", str(raised.exception))
+        self.assertNotIn("secret-test-token", str(raised.exception))
+
+    def test_rate_limit_retries_with_retry_after(self):
+        headers = HTTPMessage()
+        headers.add_header("Retry-After", "0")
+        error = HTTPError(
+            "https://api.notion.com", 429, "Rate limited", headers,
+            io.BytesIO(b'{"code":"rate_limited"}'),
+        )
+        opener = FakeOpener([
+            error, FakeResponse({"results": [], "has_more": False})
+        ])
+        client = NotionAPIClient(
+            "token", opener=opener, sleeper=lambda delay: None,
+            min_interval=0, max_retries=1,
+        )
+        self.assertEqual(client.query_data_source("ds"), [])
+        self.assertEqual(len(opener.requests), 2)
+
+    def test_transient_server_errors_retry_with_bounded_backoff(self):
+        for status, code in (
+            (500, "internal_server_error"),
+            (502, "bad_gateway"),
+            (503, "service_unavailable"),
+            (504, "gateway_timeout"),
+            (529, "service_overload"),
+        ):
+            with self.subTest(status=status):
+                error = HTTPError(
+                    "https://api.notion.com", status, "Temporary failure",
+                    HTTPMessage(), io.BytesIO(
+                        json.dumps({"code": code}).encode("utf-8")
+                    ),
+                )
+                opener = FakeOpener([
+                    error, FakeResponse({"results": [], "has_more": False})
+                ])
+                delays = []
+                client = NotionAPIClient(
+                    "token", opener=opener, sleeper=delays.append,
+                    min_interval=0, max_retries=1,
+                )
+                with patch(
+                    "memory_gate_core.notion_memory_provider.random.uniform",
+                    return_value=0.0,
+                ):
+                    self.assertEqual(client.query_data_source("ds"), [])
+                self.assertEqual(len(opener.requests), 2)
+                self.assertEqual(delays, [0.25])
+
+    def test_transient_network_error_retries_with_backoff(self):
+        opener = FakeOpener([
+            URLError("temporary network issue"),
+            FakeResponse({"results": [], "has_more": False}),
+        ])
+        delays = []
+        client = NotionAPIClient(
+            "token", opener=opener, sleeper=delays.append,
+            min_interval=0, max_retries=1,
+        )
+        with patch(
+            "memory_gate_core.notion_memory_provider.random.uniform",
+            return_value=0.0,
+        ):
+            self.assertEqual(client.query_data_source("ds"), [])
+        self.assertEqual(len(opener.requests), 2)
+        self.assertEqual(delays, [0.25])
+
+    def test_transient_server_error_exhausts_only_bounded_retries(self):
+        errors = [
+            HTTPError(
+                "https://api.notion.com", 503, "Temporary failure",
+                HTTPMessage(), io.BytesIO(b'{"code":"service_unavailable"}'),
+            )
+            for _ in range(3)
+        ]
+        opener = FakeOpener(errors)
+        delays = []
+        client = NotionAPIClient(
+            "token", opener=opener, sleeper=delays.append,
+            min_interval=0, max_retries=2,
+        )
+        with patch(
+            "memory_gate_core.notion_memory_provider.random.uniform",
+            return_value=0.0,
+        ):
+            with self.assertRaises(NotionAPIError) as raised:
+                client.query_data_source("ds")
+        self.assertEqual(raised.exception.status, 503)
+        self.assertEqual(raised.exception.code, "service_unavailable")
+        self.assertNotIn("Temporary failure", str(raised.exception))
+        self.assertEqual(len(opener.requests), 3)
+        self.assertEqual(delays, [0.25, 0.5])
+
+    def test_page_properties_extract_common_types(self):
+        result = extract_page_properties({"properties": {
+            "Title": {"type": "title", "title": [{"plain_text": "A title"}]},
+            "Status": {"type": "status", "status": {"name": "VERIFIED"}},
+            "Tags": {
+                "type": "multi_select", "multi_select": [{"name": "memory"}]
+            },
+            "Notes": {
+                "type": "rich_text", "rich_text": [{"plain_text": "detail"}]
+            },
+            "From Memory": {
+                "type": "relation",
+                "relation": [{"id": "3f30fddd-05e9-812b-b6e3-caf8ad073dd7"}],
+            },
+            "To Memory": {"type": "relation", "relation": []},
+            "Email": {"type": "email", "email": "private@example.invalid"},
+            "Phone": {"type": "phone_number", "phone_number": "+10000000000"},
+            "URL": {"type": "url", "url": "https://example.org/source"},
+        }})
+        self.assertEqual(result["Title"], "A title")
+        self.assertEqual(result["Status"], "VERIFIED")
+        self.assertEqual(result["Tags"], ["memory"])
+        self.assertEqual(result["Notes"], "detail")
+        self.assertEqual(
+            result["From Memory"],
+            ["3f30fddd-05e9-812b-b6e3-caf8ad073dd7"],
+        )
+        self.assertEqual(result["To Memory"], [])
+        self.assertNotIn("Email", result)
+        self.assertNotIn("Phone", result)
+        self.assertEqual(result["URL"], "https://example.org/source")
+
+
+class NotionMemoryProviderTests(unittest.TestCase):
+    def build_provider(self, responses, **kwargs):
+        opener = FakeOpener(responses)
+        client = NotionAPIClient(
+            "token", opener=opener, sleeper=lambda delay: None, min_interval=0,
+        )
+        provider = NotionMemoryProvider(
+            client, allowed_subject_id="subject-1",
+            data_sources={
+                "Memories": "mem-ds", "Memory Archive": "archive-ds"
+            },
+            pages={"About": "about-page", "Operating Rules": "rules-page"},
+            clock=lambda: 1_800_000_000.0, **kwargs,
+        )
+        return provider, opener
+
+    def test_builds_snapshot_from_memories_archive_and_required_pages(self):
+        memory = page("memory-page", {
+            "Title": {
+                "type": "title", "title": [{"plain_text": "User preference"}]
+            },
+            "Type": {"type": "select", "select": {"name": "Preference"}},
+        })
+        archive = page("archive-page", {
+            "Content": {
+                "type": "title",
+                "title": [{"plain_text": "Verified project fact"}],
+            },
+            "Status": {"type": "select", "select": {"name": "VERIFIED"}},
+            "Notes": {
+                "type": "rich_text",
+                "rich_text": [{"plain_text": "Evidence note"}],
+            },
+        })
+        responses = [
+            FakeResponse({"results": [memory], "has_more": False}),
+            FakeResponse({"results": [archive], "has_more": False}),
+            FakeResponse({
+                "results": [paragraph("Archive body")], "has_more": False,
+            }),
+            FakeResponse({
+                "results": [paragraph("Preference body")], "has_more": False,
+            }),
+            FakeResponse({
+                "object": "page", "id": "about-page",
+                "last_edited_time": "2026-11-01T00:00:00Z",
+            }),
+            FakeResponse({
+                "results": [paragraph("About context")], "has_more": False,
+            }),
+            FakeResponse({
+                "object": "page", "id": "rules-page",
+                "last_edited_time": "2026-11-01T00:00:00Z",
+            }),
+            FakeResponse({
+                "results": [paragraph("Mandatory operating rules")],
+                "has_more": False,
+            }),
+        ]
+        provider, opener = self.build_provider(responses)
+        snapshot = provider.retrieve("subject-1")
+        self.assertIn("User preference", snapshot.content)
+        self.assertIn("Preference body", snapshot.content)
+        self.assertIn("Verified project fact", snapshot.content)
+        self.assertIn("VERIFIED", snapshot.content)
+        self.assertIn("About context", snapshot.content)
+        self.assertIn("Mandatory operating rules", snapshot.content)
+        self.assertIn("\n\n", snapshot.content)
+        self.assertIn("memory-page", snapshot.source_ids)
+        self.assertIn("archive-page", snapshot.source_ids)
+        self.assertEqual(len(snapshot.version), 64)
+        self.assertEqual(len(opener.requests), 8)
+
+    def test_wrong_subject_is_rejected_before_network(self):
+        provider, opener = self.build_provider([])
+        with self.assertRaises(PermissionError):
+            provider.retrieve("other-subject")
+        self.assertEqual(opener.requests, [])
+
+    def test_context_limit_fails_closed(self):
+        memory = page("memory-page", {
+            "Title": {
+                "type": "title", "title": [{"plain_text": "Preference"}]
+            },
+        })
+        responses = [
+            FakeResponse({"results": [memory], "has_more": False}),
+            FakeResponse({"results": [], "has_more": False}),
+            FakeResponse({
+                "results": [paragraph("x" * 200)], "has_more": False,
+            }),
+            FakeResponse({
+                "object": "page", "id": "about-page", "last_edited_time": "v1"
+            }),
+            FakeResponse({"results": [paragraph("About")], "has_more": False}),
+            FakeResponse({
+                "object": "page", "id": "rules-page", "last_edited_time": "v1"
+            }),
+            FakeResponse({"results": [paragraph("Rules")], "has_more": False}),
+        ]
+        provider, _ = self.build_provider(responses, max_context_bytes=100)
+        with self.assertRaises(NotionAPIError) as raised:
+            provider.retrieve("subject-1")
+        self.assertEqual(raised.exception.code, "context_limit")
+
+    def test_from_env_requires_server_side_credentials(self):
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(NotionAPIError) as raised:
+                NotionMemoryProvider.from_env()
+        self.assertEqual(raised.exception.code, "configuration_missing")
+
+
+    def test_existing_source_registry_is_separate_and_referenced_sources_enter_snapshot(self):
+        import uuid
+
+        evidence_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "provider:evidence"))
+        claim_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "provider:claim"))
+        relation_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "provider:relation"))
+        source_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "provider:registered-source"))
+        evidence_page = page(evidence_id, {
+            "Content": {"type": "title", "title": [{"plain_text": "Evidence result"}]},
+            "Type": {"type": "select", "select": {"name": "RESULT"}},
+            "Status": {"type": "select", "select": {"name": "VERIFIED"}},
+            "Project": {"type": "rich_text", "rich_text": [{"plain_text": "Provider test"}]},
+            "Topic": {"type": "rich_text", "rich_text": [{"plain_text": "Target claim"}]},
+        })
+        claim_page = page(claim_id, {
+            "Content": {"type": "title", "title": [{"plain_text": "Target claim"}]},
+            "Type": {"type": "select", "select": {"name": "FACT"}},
+            "Status": {"type": "select", "select": {"name": "VERIFIED"}},
+            "Project": {"type": "rich_text", "rich_text": [{"plain_text": "Provider test"}]},
+            "Topic": {"type": "rich_text", "rich_text": [{"plain_text": "Target claim"}]},
+        })
+        evidence_payload = {
+            "schema": "memory-gate/evidence/v1",
+            "relation": "SUPPORTS",
+            "from_role": "EVIDENCE",
+            "to_role": "CLAIM",
+            "scope": {
+                "project": "Provider test",
+                "topic": "Target claim",
+                "statement": "The result supports the explicitly scoped claim.",
+            },
+            "sources": [source_id],
+        }
+        relation_page = page(relation_id, {
+            "Relation": {"type": "title", "title": [{"plain_text": "Evidence result → target claim"}]},
+            "From Memory": {"type": "rich_text", "rich_text": [{"plain_text": f"mem:{evidence_id}"}]},
+            "To Memory": {"type": "rich_text", "rich_text": [{"plain_text": f"mem:{claim_id}"}]},
+            "Relation Type": {"type": "select", "select": {"name": "SUPPORTS"}},
+            "Status": {"type": "select", "select": {"name": "ACTIVE"}},
+            "Evidence": {"type": "rich_text", "rich_text": [{"plain_text": json.dumps(evidence_payload)}]},
+        })
+        source_page = page(source_id, {
+            "Source": {"type": "title", "title": [{"plain_text": "Primary test source"}]},
+            "Source Type": {"type": "select", "select": {"name": "PRIMARY"}},
+            "DOI": {"type": "rich_text", "rich_text": [{"plain_text": "10.1234/provider-test"}]},
+            "URL": {"type": "url", "url": "https://example.org/provider-test"},
+            "Version": {"type": "rich_text", "rich_text": [{"plain_text": "1"}]},
+        })
+        about_page_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "provider:about"))
+        rules_page_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "provider:rules"))
+        responses = [
+            FakeResponse({"results": [evidence_page, claim_page], "has_more": False}),
+            FakeResponse({"results": [relation_page], "has_more": False}),
+            FakeResponse({"results": [source_page], "has_more": False}),
+            FakeResponse({"results": [paragraph("Archive body one")], "has_more": False}),
+            FakeResponse({"results": [paragraph("Archive body two")], "has_more": False}),
+            FakeResponse({"object": "page", "id": about_page_id, "last_edited_time": "2026-11-01T00:00:00Z"}),
+            FakeResponse({"results": [paragraph("About context")], "has_more": False}),
+            FakeResponse({"object": "page", "id": rules_page_id, "last_edited_time": "2026-11-01T00:00:00Z"}),
+            FakeResponse({"results": [paragraph("Operating rules")], "has_more": False}),
+        ]
+        opener = FakeOpener(responses)
+        client = NotionAPIClient(
+            "token", opener=opener, sleeper=lambda delay: None, min_interval=0,
+        )
+        provider = NotionMemoryProvider(
+            client, allowed_subject_id="subject-1",
+            data_sources={
+                "Memory Archive": "archive-ds",
+                "Memory Relations": "relations-ds",
+                "Memory Sources": "sources-ds",
+            },
+            pages={"About": about_page_id, "Operating Rules": rules_page_id},
+            clock=lambda: 1_800_000_000.0,
+        )
+        snapshot = provider.retrieve("subject-1", query="target claim")
+        self.assertIn("Primary test source", snapshot.content)
+        self.assertIn("https://example.org/provider-test", snapshot.content)
+        self.assertIn(source_id, snapshot.source_ids)
+        self.assertIn(evidence_id, snapshot.source_ids)
+        self.assertIn(claim_id, snapshot.source_ids)
+        self.assertEqual(len(snapshot.version), 64)
+        self.assertEqual(len(opener.requests), 9)
+
+
+if __name__ == "__main__":
+    unittest.main()
