@@ -24,7 +24,7 @@
 - Locator kinds: `page`, `section`, `paragraph`, `timestamp`, `json_pointer`, `artifact_offset`.
 - Relation kinds: SUPPORTS, REFUTES, CONTRADICTS, SUPERSEDES, DERIVED_FROM only.
 - Architecture relations such as USES, PART_OF, and TESTS remain outside Memory Graph.
-- Legacy text is never rewritten or auto-promoted; legacy/unverified Evidence cannot satisfy v0.2 activation.
+- Legacy text is never rewritten or auto-promoted; legacy/unverified Evidence cannot satisfy v0.2 activation, so current plain-text Memory Graph edges will have no ordinary retrieval effect until curated.
 - No network fetch, no new dependency unless proven necessary, no Notion writes, no changes to `main`, no merge or publish.
 
 ## Review Focus
@@ -59,6 +59,7 @@ Task 2 produces:
 - `resolve_registered_source(evidence: Mapping[str, Any], source_records: Sequence[Mapping[str, Any]]) -> SourceResolutionResult`
 - Structural status values: `VALID`, `LEGACY_UNVERIFIED`, `INVALID_EVIDENCE`.
 - Provenance status values: `RESOLVED`, `SOURCE_MISSING`, `SOURCE_AMBIGUOUS`, `SOURCE_INVALID`, `SOURCE_VERSION_MISMATCH`.
+- Relation status values: `VALID`, `INVALID_ROLE`, `INVALID_ENDPOINTS`, `INVALID_SCOPE`, `INVALID_VALIDITY`, `UNSUPPORTED_RELATION`.
 
 Task 3 produces:
 
@@ -130,7 +131,7 @@ Expected: FAIL because `memory_gate_core.evidence` does not exist.
 
 - [ ] **Step 3: Implement the typed result and strict parser**
 
-Implement `EvidenceParseResult` and `parse_evidence`. Reject duplicate keys via `json.loads(..., object_pairs_hook=...)`; reject unknown keys; enforce the design doc's schema, UUID, timestamp, digest, locator allowlist, and bounded sizes. Do not coerce values.
+Implement `EvidenceParseResult` and `parse_evidence`. Reject duplicate keys via `json.loads(..., object_pairs_hook=...)`; reject unknown keys; enforce the design doc's schema, UUID, timestamp, digest, locator allowlist, and bounded sizes. Return `LEGACY_UNVERIFIED` for ordinary non-JSON legacy text, `INVALID_EVIDENCE` for malformed JSON or malformed v1 structure, and `VALID` only for structurally valid v1 JSON. Do not coerce values.
 
 - [ ] **Step 4: Run parser tests and confirm GREEN**
 
@@ -230,7 +231,7 @@ Expected: FAIL because retrieval still accepts any non-empty Evidence string.
 
 - [ ] **Step 3: Integrate validation**
 
-Pass all provider records into the existing relation validator. Index source pages separately from Memory Archive endpoints. Keep existing endpoint identity, relation status, stable relation UUID, direction, and cycle checks. A legacy or invalid Evidence result adds a precise warning and has no graph effect. Preserve separate structural, provenance/source-version, and role/scope validation statuses. Do not report the digest as verified unless artifact bytes were actually supplied and hashed.
+Pass all provider records into the existing relation validator. Index source pages separately from Memory Archive endpoints. Keep existing endpoint identity, relation status, stable relation UUID, direction, and cycle checks. A legacy or invalid Evidence result adds a precise warning and has no graph effect. Preserve separate structural, provenance/source-version, and role/scope validation statuses. Do not report the digest as verified unless artifact bytes were actually supplied and hashed. This means every currently plain-text Memory Relations Evidence row loses its ordinary retrieval effect until a curator replaces it with structured Evidence and registers the matching source; document and test this intentional rollout effect.
 
 - [ ] **Step 4: Run integration tests and confirm GREEN**
 
