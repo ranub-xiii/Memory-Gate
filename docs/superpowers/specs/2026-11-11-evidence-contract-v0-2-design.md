@@ -75,8 +75,13 @@ The Evidence property for a v0.2 Memory Graph relation contains one JSON object 
   "content_sha256": "64 lowercase hexadecimal characters",
   "scope": {
     "id": "stable-scope-key",
-    "description": "The exact proposition or context to which this evidence applies"
+    "description": "The exact proposition or context to which this evidence applies",
+    "endpoint_ids": [
+      "00000000-0000-4000-8000-000000000001",
+      "00000000-0000-4000-8000-000000000002"
+    ]
   },
+  "validity": null,
   "endpoints": {
     "from_id": "00000000-0000-4000-8000-000000000001",
     "to_id": "00000000-0000-4000-8000-000000000002",
@@ -86,7 +91,7 @@ The Evidence property for a v0.2 Memory Graph relation contains one JSON object 
 }
 ```
 
-The implementation must enforce exact top-level and nested key sets (no unknown keys), required non-empty strings, UUID syntax, timezone-aware RFC 3339 timestamps normalized to UTC, and a 64-character SHA-256 hex digest. The digest is supplied by the evidence curator for the exact captured source content; the validator does not download or hash a live URL. `source_version` may be null only when the source has no declared version; the content digest remains mandatory.
+The implementation must enforce exact top-level and nested key sets (no unknown keys), required non-empty strings, UUID syntax, timezone-aware RFC 3339 timestamps normalized to UTC, and a 64-character SHA-256 hex digest. The digest is supplied by the evidence curator for the exact captured source content; the validator does not download or hash a live URL. `source_version` may be null only when the source has no declared version; the content digest remains mandatory. `scope.endpoint_ids` must contain exactly the two canonical relation endpoint UUIDs (sorted lexicographically); this binds the curator-declared scope to the precise edge without pretending to prove the scope's truth. `validity` is null for all relation types except SUPERSEDES, where it is an object containing `from_valid_from` and `to_valid_from` timestamps.
 
 Allowed locator kinds are a deliberately small allowlist: `page`, `section`, `paragraph`, `timestamp`, `json_pointer`, and `artifact_offset`. A locator value must be non-empty and bounded in length. A raw URL is not a locator and cannot replace `source_ref`.
 
@@ -103,8 +108,10 @@ The Evidence `endpoints` object must name the exact page UUIDs already present i
 | SUPPORTS | EVIDENCE | CLAIM | Evidence scope must match the target claim scope |
 | REFUTES | COUNTER_EVIDENCE | CLAIM | Counter-evidence scope must match the target claim scope |
 | CONTRADICTS | CLAIM | CLAIM | Both claims must declare the same non-empty scope ID; relation remains symmetric |
-| SUPERSEDES | NEWER_VERSION | OLDER_VERSION | Explicit timezone-aware validity/version ordering is required; direction alone is insufficient |
+| SUPERSEDES | NEWER_VERSION | OLDER_VERSION | `validity.from_valid_from` must be later than `validity.to_valid_from`; direction alone is insufficient |
 | DERIVED_FROM | DERIVED_RECORD | SOURCE_RECORD | Directed edge must remain acyclic |
+
+The validator must compare `scope.endpoint_ids` with the canonical From/To UUIDs for every relation. For CONTRADICTS, the single scope object applies to both claims. For SUPPORTS and REFUTES, the scope object is the curator-declared scope of the target claim. Because the current archive has no independent structured scope property, this is an explicit curation assertion, not an independently verified semantic match.
 
 The validator must not silently reinterpret unsupported relation types. `USES`, `PART_OF`, and `TESTS` remain Architecture Graph relations and are not accepted as Memory Graph relation kinds.
 
@@ -164,7 +171,7 @@ Required verification targets: Python 3.11, 3.12, and 3.13; compile/lint; Docker
 - Evidence v1 is parsed strictly and deterministically.
 - A source reference is accepted only when it resolves uniquely in the existing Memory Sources data source and its registered URL/DOI is structurally valid.
 - Relation endpoints and explicit roles match the relation row and role matrix.
-- Scope and temporal constraints are enforced for applicable relation types.
+- Scope endpoint IDs and temporal constraints are enforced for applicable relation types.
 - Legacy free text remains unchanged and cannot acquire v0.2 validity automatically.
 - Existing identity, direction, graph separation, cycle, and retrieval regression tests pass.
 - No Notion schema/data mutations and no changes to `main`.
