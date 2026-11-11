@@ -57,11 +57,14 @@ Task 2 produces:
 - `SourceResolutionResult(provenance_status: str, code: str | None, source_record: Mapping[str, Any] | None)`
 - `parse_evidence(value: object) -> EvidenceParseResult`
 - `resolve_registered_source(evidence: Mapping[str, Any], source_records: Sequence[Mapping[str, Any]]) -> SourceResolutionResult`
+- Structural status values: `VALID`, `LEGACY_UNVERIFIED`, `INVALID_EVIDENCE`.
+- Provenance status values: `RESOLVED`, `SOURCE_MISSING`, `SOURCE_AMBIGUOUS`, `SOURCE_INVALID`, `SOURCE_VERSION_MISMATCH`.
 
 Task 3 produces:
 
 - `RelationValidationResult(status: str, code: str | None)`
 - `validate_relation_evidence(relation_type: str, relation: Mapping[str, Any], evidence: Mapping[str, Any], source_record: Mapping[str, Any], from_record: Mapping[str, Any], to_record: Mapping[str, Any]) -> RelationValidationResult`
+- Relation status values: `VALID`, `INVALID_ROLE`, `INVALID_ENDPOINTS`, `INVALID_SCOPE`, `INVALID_VALIDITY`, `UNSUPPORTED_RELATION`.
 
 Task 4 consumes these interfaces from `_relation_warnings(records, relations)`. Source records are the provider records whose `source_name == "Memory Sources"`; graph endpoints continue to resolve only against `Memory Archive`.
 
@@ -116,6 +119,7 @@ Expected: PASS.
   - `test_parse_rejects_unknown_schema_version`
   - `test_parse_rejects_invalid_uuid_timestamp_digest_and_locator`
   - `test_parse_requires_scope_endpoint_ids_and_conditional_validity_shape`
+  - `test_parse_rejects_missing_from_scope_id_or_to_scope_id`
   - `test_parse_rejects_oversized_evidence_payload_and_locator`
 
 - [ ] **Step 2: Run parser tests and confirm RED**
@@ -126,7 +130,7 @@ Expected: FAIL because `memory_gate_core.evidence` does not exist.
 
 - [ ] **Step 3: Implement the typed result and strict parser**
 
-Implement `EvidenceValidationResult` and `parse_evidence`. Reject duplicate keys via `json.loads(..., object_pairs_hook=...)`; reject unknown keys; enforce the design doc's schema, UUID, timestamp, digest, locator allowlist, and bounded sizes. Do not coerce values.
+Implement `EvidenceParseResult` and `parse_evidence`. Reject duplicate keys via `json.loads(..., object_pairs_hook=...)`; reject unknown keys; enforce the design doc's schema, UUID, timestamp, digest, locator allowlist, and bounded sizes. Do not coerce values.
 
 - [ ] **Step 4: Run parser tests and confirm GREEN**
 
