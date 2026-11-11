@@ -15,6 +15,9 @@
 - Python minimum: 3.11.
 - Evidence schema identifier: `memory-gate.evidence.v1`.
 - Registered source identity: Notion page UUID in the existing `Memory Sources` data source.
+- Registered source version: exact string match between Evidence `source_version` and the source page's `Version` property; null only when the registry field is empty.
+- Evidence payload limit: 16,384 UTF-8 bytes; locator value limit: 2,048 characters; scope description limit: 2,000 characters; each scope ID limit: 128 characters.
+- Duplicate DOI/URL values across distinct source page UUIDs are permitted; duplicate occurrences of the same source page UUID in resolver input are ambiguous.
 - Registered URL policy: absolute HTTPS only; reject credentials/userinfo and malformed hostnames; DOI syntax validation is offline.
 - SHA-256 digest: exactly 64 lowercase hexadecimal characters.
 - Timestamps: timezone-aware RFC 3339; normalize to UTC.
@@ -28,7 +31,7 @@
 
 - Duplicate JSON keys can make parsers disagree — test duplicate-key rejection in Task 2.
 - An HTTPS URL with userinfo or an encoded unsafe scheme can bypass naive checks — test userinfo and malformed URL inputs in Task 2.
-- Two source pages can share a URL/DOI — test duplicate source identity and duplicate source locator behavior in Task 2.
+- The source registry can contain repeated DOI/URL metadata for distinct editions — verify lookup remains UUID-based and only duplicated page UUIDs are ambiguous in Task 2.
 - Evidence can name valid but swapped endpoint IDs — test exact From/To binding in Task 3.
 - A legacy ACTIVE row can continue affecting retrieval unless integration is fail-closed — test legacy text is excluded from v0.2 activation in Task 4.
 
@@ -50,9 +53,10 @@
 
 Task 2 produces:
 
-- `EvidenceValidationResult(status: str, code: str | None, evidence: Mapping[str, Any] | None, source_record: Mapping[str, Any] | None)`
-- `parse_evidence(value: object) -> EvidenceValidationResult`
-- `resolve_registered_source(evidence: Mapping[str, Any], source_records: Sequence[Mapping[str, Any]]) -> EvidenceValidationResult`
+- `EvidenceParseResult(structural_status: str, code: str | None, evidence: Mapping[str, Any] | None)`
+- `SourceResolutionResult(provenance_status: str, code: str | None, source_record: Mapping[str, Any] | None)`
+- `parse_evidence(value: object) -> EvidenceParseResult`
+- `resolve_registered_source(evidence: Mapping[str, Any], source_records: Sequence[Mapping[str, Any]]) -> SourceResolutionResult`
 
 Task 3 produces:
 
@@ -136,7 +140,8 @@ Expected: parser tests PASS.
   - `test_resolve_blocks_empty_source_registry`
   - `test_resolve_accepts_registered_https_url_or_doi`
   - `test_resolve_rejects_http_credentials_unsafe_scheme_and_malformed_host`
-  - `test_resolve_rejects_duplicate_registered_url_or_doi`
+  - `test_resolve_requires_exact_registered_version_match`
+  - `test_resolve_allows_same_doi_for_distinct_registered_page_ids`
 
 - [ ] **Step 6: Run source tests and confirm RED**
 
@@ -146,7 +151,7 @@ Expected: FAIL because source resolution is not implemented.
 
 - [ ] **Step 7: Implement registered-source resolution**
 
-Resolve `source_ref` only against `Memory Sources` page IDs. Require exactly one match and at least one valid registered HTTPS URL or DOI. Reject duplicate source identity/locator ambiguity. Do not perform network I/O.
+Resolve `source_ref` only against records with `source_name == "Memory Sources"` and exact matching Notion page UUID. Require exactly one match and at least one valid registered HTTPS URL or DOI. Require Evidence `source_version` to exactly equal `properties["Version"]`, with null matching an empty registry value. Duplicate page UUIDs in resolver input are ambiguous; identical DOI/URL values on distinct page UUIDs are allowed. Do not perform network I/O or claim the content digest was recalculated.
 
 - [ ] **Step 8: Run all Evidence tests and confirm GREEN**
 
@@ -175,6 +180,8 @@ Expected: PASS.
   - `test_derived_from_requires_derived_to_source_roles`
   - `test_relation_endpoint_ids_must_match_evidence`
   - `test_scope_endpoint_ids_must_match_exact_relation_endpoints`
+  - `test_scope_pair_consistency_by_relation_kind`
+  - `test_derived_from_permits_distinct_endpoint_scopes`
   - `test_architecture_relation_types_are_not_memory_graph_types`
 
 - [ ] **Step 2: Run focused tests and confirm RED**
@@ -185,7 +192,7 @@ Expected: FAIL because the module does not exist.
 
 - [ ] **Step 3: Implement the explicit role matrix**
 
-Implement the exact relation-to-role mapping in the design doc. Require exact UUID equality between Evidence endpoint IDs and the relation's resolved From/To records. Require non-empty scope IDs; require same scope for CONTRADICTS; require explicit ordered validity values for SUPERSEDES. Unknown relation types fail closed.
+Implement the exact relation-to-role mapping in the design doc. Require exact UUID equality between Evidence endpoint IDs and the relation's resolved From/To records. Require `scope.endpoint_ids` to equal the two canonical endpoint UUIDs in sorted order. SUPPORTS, REFUTES, CONTRADICTS, and SUPERSEDES require equal non-empty `from_scope_id` and `to_scope_id`; DERIVED_FROM requires both non-empty but permits them to differ. Require explicit ordered validity values for SUPERSEDES. Mark scope as curator-declared because the current archive schema has no Scope property. Unknown relation types fail closed.
 
 - [ ] **Step 4: Run focused tests and confirm GREEN**
 
@@ -205,7 +212,7 @@ Expected: PASS.
 
 - [ ] **Step 1: Write failing integration tests**
   - `test_legacy_text_evidence_does_not_activate_relation_v02`: legacy Evidence is unchanged but cannot add support/refute/conflict/supersession/derivation effects.
-  - `test_valid_v02_supports_relation_adds_support_warning`: valid registered source, exact endpoint IDs, roles, and scope produce the existing support warning.
+  - `test_valid_v02_supports_relation_adds_support_warning`: valid registered source, exact endpoint IDs, roles, source version, and declared scope pair produce the existing support warning.
   - `test_unregistered_source_blocks_relation_activation`
   - `test_invalid_role_or_scope_blocks_relation_activation`
   - `test_invalid_evidence_does_not_create_supersession_suppression`
@@ -219,7 +226,7 @@ Expected: FAIL because retrieval still accepts any non-empty Evidence string.
 
 - [ ] **Step 3: Integrate validation**
 
-Pass all provider records into the existing relation validator. Index source pages separately from Memory Archive endpoints. Keep existing endpoint identity, relation status, stable relation UUID, direction, and cycle checks. A legacy or invalid Evidence result adds a precise warning and has no graph effect.
+Pass all provider records into the existing relation validator. Index source pages separately from Memory Archive endpoints. Keep existing endpoint identity, relation status, stable relation UUID, direction, and cycle checks. A legacy or invalid Evidence result adds a precise warning and has no graph effect. Preserve separate structural, provenance/source-version, and role/scope validation statuses. Do not report the digest as verified unless artifact bytes were actually supplied and hashed.
 
 - [ ] **Step 4: Run integration tests and confirm GREEN**
 
