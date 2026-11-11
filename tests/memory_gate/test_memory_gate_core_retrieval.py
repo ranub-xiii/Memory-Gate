@@ -52,7 +52,7 @@ class MemoryRetrievalTests(unittest.TestCase):
             "REFUTES": ("COUNTER_EVIDENCE", "CLAIM", "OBSERVATION", "FACT"),
             "CONTRADICTS": ("CLAIM", "CLAIM", "FACT", "FACT"),
             "SUPERSEDES": ("NEWER_CLAIM", "OLDER_CLAIM", "FACT", "FACT"),
-            "DERIVED_FROM": ("DERIVED_RECORD", "SOURCE_RECORD", "DERIVATION", "SOURCE"),
+            "DERIVED_FROM": ("DERIVED_RECORD", "SOURCE_RECORD", "FACT", "FACT"),
         }
         role = roles.get(relation_type)
         if role is not None:
