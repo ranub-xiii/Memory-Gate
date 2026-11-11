@@ -109,12 +109,13 @@ Expected: PASS.
 - Create: `tests/memory_gate/test_memory_gate_evidence.py`
 
 **Interfaces:**
-- `parse_evidence(value: object) -> EvidenceValidationResult`
-- `resolve_registered_source(evidence: Mapping[str, Any], source_records: Sequence[Mapping[str, Any]]) -> EvidenceValidationResult`
+- `parse_evidence(value: object) -> EvidenceParseResult`
+- `resolve_registered_source(evidence: Mapping[str, Any], source_records: Sequence[Mapping[str, Any]]) -> SourceResolutionResult`
 
 - [ ] **Step 1: Write failing parser tests**
   - `test_parse_valid_evidence_v1`: accepts the exact schema in the design doc.
-  - `test_parse_rejects_malformed_json`
+  - `test_parse_rejects_malformed_json_object`
+  - `test_parse_classifies_plain_text_as_legacy_unverified`
   - `test_parse_rejects_duplicate_json_keys`
   - `test_parse_rejects_unknown_or_missing_keys`
   - `test_parse_rejects_unknown_schema_version`
